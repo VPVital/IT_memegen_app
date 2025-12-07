@@ -1,10 +1,10 @@
-import React, { Component, useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, ReactNode } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
 import { ComicDisplay } from './components/ComicDisplay';
 import { TerminalLoader } from './components/TerminalLoader';
-import { generateMemeText, generateImageFromPrompt, generateComicScript } from './services/geminiService';
+import { generateMemeText, generateImageFromPrompt, generateComicScript, ImageGenerationResult } from './services/geminiService';
 import { GenerationType, MemeData, ComicData, ComicStyle, COMIC_STYLES } from './types';
 
 interface ErrorBoundaryProps {
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = {
@@ -30,7 +30,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
   }
 
@@ -262,20 +262,29 @@ function App() {
         // 2. Generate Image
         if (signal.aborted) return;
         setStatusMessage('Rendering meme image...');
-        // Increased timeout to 90s to account for potential retries / fallback models
-        const imageUrl = await withTimeout(
+        
+        // Try multiple models aggressive fallback
+        const imageResult = await withTimeout(
             generateImageFromPrompt(textData.visualPrompt + " high quality, funny meme image style"),
-            90000, 
-            undefined
+            120000, // 2 minutes max for aggressive fallback
+            { error: "Timeout" }
         );
         
         if (signal.aborted) return;
+        
+        let finalImageUrl = imageResult.imageUrl;
+        // If failed, use placeholder with specific error message
+        if (!finalImageUrl) {
+            const errorReason = imageResult.error || "Render Failed";
+            // URL encode the error to show in placeholder
+            finalImageUrl = `https://placehold.co/800x800/1f2937/ffffff?text=${encodeURIComponent(errorReason.slice(0, 30))}&font=roboto`;
+        }
         
         const newMeme: MemeData = {
            id: Date.now().toString(),
            type: GenerationType.SINGLE,
            ...textData,
-           imageUrl: imageUrl || "https://placehold.co/800x800/1f2937/ffffff?text=Render+Failed&font=roboto",
+           imageUrl: finalImageUrl,
            isLoading: false,
            timestamp: Date.now()
         };
@@ -339,7 +348,7 @@ function App() {
 
           // Artificial delay to prevent API Rate Limits (429)
           if (i > 0) {
-            let timeLeft = 15;
+            let timeLeft = 10; // Slightly shorter cooldown as we are rotating models
             while (timeLeft > 0) {
                if (signal.aborted) break;
                setCoolDownSeconds(timeLeft);
@@ -356,14 +365,13 @@ function App() {
           setStatusMessage(`Rendering panel ${i+1}/${updatedPanels.length}...`);
           const fullPrompt = `${panel.description}. ${selectedStyle.promptSuffix}`;
           
-          let imageUrl;
+          let imageResult: ImageGenerationResult = { error: 'Unknown' };
           
           try {
-            // Increased timeout to 90s for image fallback
-            imageUrl = await withTimeout(
+            imageResult = await withTimeout(
                 generateImageFromPrompt(fullPrompt),
-                90000, 
-                undefined
+                120000, 
+                { error: "Timeout" }
             );
           } catch (err) {
             console.error(`Panel ${i} error`, err);
@@ -371,14 +379,16 @@ function App() {
           
           if (signal.aborted) break; 
 
-          // Fallback image
-          if (!imageUrl) {
-             console.warn(`Panel ${i+1} failed to generate.`);
-             imageUrl = `https://placehold.co/600x600/ffffff/000000?text=Panel+${i+1}+Error&font=roboto`;
+          // Fallback image with error text
+          let panelImageUrl = imageResult.imageUrl;
+          if (!panelImageUrl) {
+             const errorText = imageResult.error || `Panel ${i+1} Error`;
+             console.warn(`Panel ${i+1} failed: ${errorText}`);
+             panelImageUrl = `https://placehold.co/600x600/ffffff/000000?text=${encodeURIComponent(errorText.slice(0, 20))}&font=roboto`;
           }
 
           // Update local state safely
-          updatedPanels[i] = { ...panel, imageUrl: imageUrl };
+          updatedPanels[i] = { ...panel, imageUrl: panelImageUrl };
           currentComicState = { ...currentComicState, panels: [...updatedPanels] };
           
           // Force new object reference for React reconciliation

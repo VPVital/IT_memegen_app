@@ -1,11 +1,22 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
-// Constants for Models
+// Constants for Models - Aggressive Fallback List
 const TEXT_MODEL = 'gemini-2.5-flash';
-const IMAGE_MODEL_FAST = 'gemini-2.5-flash-image'; // Preview, Fast, sometimes 500s
-const IMAGE_MODEL_QUALITY = 'imagen-3.0-generate-001'; // Stable, Strict Quota
-const IMAGE_MODEL_BACKUP = 'gemini-3-pro-image-preview'; // Powerful, Backup
+
+// Prioritized list of models to try for images. 
+// We include experimental models as they often have different quota pools or stability profiles.
+const IMAGE_MODELS_PRIORITY = [
+  'gemini-2.5-flash-image',      // Primary: Fast, Preview
+  'gemini-2.0-flash-exp',        // Secondary: Experimental often works when Preview fails
+  'imagen-3.0-generate-001',     // Tertiary: High Quality, Strict Quota
+  'gemini-3-pro-image-preview'   // Fallback: Heavy duty, might be slower
+];
+
+export interface ImageGenerationResult {
+    imageUrl?: string;
+    error?: string;
+}
 
 // Helper to strip markdown formatting and find JSON object
 const cleanJson = (text: string): string => {
@@ -31,30 +42,27 @@ const cleanJson = (text: string): string => {
 // Helper for retrying async operations with exponential backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 3, 
-  delay: number = 2000
+  retries: number = 2, 
+  delay: number = 1000
 ): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
     if (retries <= 0) throw error;
     
-    // Check for network/server errors (5xx), specific XHR errors, or Rate Limits (429)
     const shouldRetry = 
       (error?.status && error.status >= 500) || 
       error?.status === 429 ||
-      error?.message?.includes('xhr error') || 
-      error?.message?.includes('fetch failed') ||
-      error?.message?.includes('NetworkError') ||
+      error?.message?.includes('xhr') || 
+      error?.message?.includes('fetch') ||
       error?.message?.includes('500') ||
       error?.message?.includes('503') ||
-      (error?.error?.code === 500) ||
-      (error?.error?.message?.includes('xhr error'));
+      (error?.error?.code === 500);
 
     if (shouldRetry) {
-      console.warn(`API call failed, retrying in ${delay}ms... (${retries} attempts left). Error:`, error);
+      // console.warn(`Retrying... attempts left: ${retries}`);
       await new Promise(resolve => setTimeout(resolve, delay));
-      return retryWithBackoff(fn, retries - 1, delay * 2);
+      return retryWithBackoff(fn, retries - 1, delay * 1.5);
     }
     
     throw error;
@@ -106,7 +114,6 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
     };
   } catch (error) {
     console.error("Meme text generation failed:", error);
-    // Fallback data to prevent crash
     return {
       type: GenerationType.SINGLE,
       visualPrompt: "Blue screen of death with confused programmer",
@@ -126,10 +133,10 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
   
   Return a JSON object with an array of panels.
   Each panel must have:
-  1. description: Visual description for image generator (in English). Keep descriptions generic regarding art style (e.g., "A programmer staring at screen") so style can be applied later. The setting should be minimal.
+  1. description: Visual description for image generator (in English). Keep generic regarding style.
   2. caption: The dialogue/text for that panel (in Russian).
   
-  Ensure there is a narrative arc with a setup and a punchline in the final panel.`;
+  Ensure there is a narrative arc.`;
 
   try {
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
@@ -161,7 +168,6 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
     try {
         json = JSON.parse(cleanJson(rawText));
     } catch (e) {
-        console.error("JSON Parse failed for comic script", rawText);
         json = { panels: [] };
     }
 
@@ -183,67 +189,53 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
 };
 
 /**
- * Generates an image based on a prompt with a 3-layer fallback strategy.
+ * Generates an image by aggressively trying multiple models.
+ * Returns an object with either the imageUrl or a specific error message.
  */
-export const generateImageFromPrompt = async (fullPrompt: string): Promise<string | undefined> => {
+export const generateImageFromPrompt = async (fullPrompt: string): Promise<ImageGenerationResult> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  let lastError = "Unknown Error";
 
-  // STRATEGY 1: Flash Image (Fastest, Preview)
-  // Note: Removed aspectRatio config to maximize success rate on preview models
-  try {
-    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-      model: IMAGE_MODEL_FAST,
-      contents: {
-        parts: [{ text: fullPrompt }],
-      },
-    }), 1, 1000); // 1 retry
+  for (const modelName of IMAGE_MODELS_PRIORITY) {
+      try {
+        // console.log(`Trying image model: ${modelName}`);
+        
+        // Imagen 3 uses generateImages, others use generateContent
+        if (modelName.includes('imagen')) {
+             const response = await retryWithBackoff<any>(() => ai.models.generateImages({
+                model: modelName,
+                prompt: fullPrompt,
+                config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, // Removed aspectRatio to reduce errors
+            }), 1, 1000);
+            
+            const base64String = response.generatedImages?.[0]?.image?.imageBytes;
+            if (base64String) {
+                return { imageUrl: `data:image/jpeg;base64,${base64String}` };
+            }
 
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
+        } else {
+            // Flash/Pro models
+            const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                model: modelName,
+                contents: { parts: [{ text: fullPrompt }] },
+            }), 1, 1000);
+
+            for (const part of response.candidates?.[0]?.content?.parts || []) {
+                if (part.inlineData) {
+                    return { imageUrl: `data:image/png;base64,${part.inlineData.data}` };
+                }
+            }
+        }
+
+      } catch (error: any) {
+          console.warn(`Model ${modelName} failed:`, error.message || error);
+          if (error.message) lastError = error.message;
+          if (error.status) lastError = `Status ${error.status}`;
+          // Continue to next model
       }
-    }
-  } catch (error) {
-    console.warn(`Layer 1 (${IMAGE_MODEL_FAST}) failed. Switching to Layer 2...`, error);
   }
 
-  // STRATEGY 2: Imagen 3 (Stable, High Quality)
-  try {
-    const response = await retryWithBackoff<any>(() => ai.models.generateImages({
-        model: IMAGE_MODEL_QUALITY,
-        prompt: fullPrompt,
-        config: {
-          numberOfImages: 1,
-          outputMimeType: 'image/jpeg',
-          aspectRatio: '1:1',
-        },
-    }), 1, 2000); 
-
-    const base64String = response.generatedImages?.[0]?.image?.imageBytes;
-    if (base64String) {
-      return `data:image/jpeg;base64,${base64String}`;
-    }
-  } catch (error) {
-    console.warn(`Layer 2 (${IMAGE_MODEL_QUALITY}) failed. Switching to Layer 3...`, error);
-  }
-
-  // STRATEGY 3: Gemini Pro Image (Ultimate Backup)
-  try {
-    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-      model: IMAGE_MODEL_BACKUP,
-      contents: {
-        parts: [{ text: fullPrompt }],
-      },
-    }), 1, 3000);
-
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-  } catch (error) {
-    console.error(`All image generation layers failed.`, error);
-  }
-
-  return undefined;
+  // If all models fail
+  console.error("All image models failed.");
+  return { error: lastError };
 };
