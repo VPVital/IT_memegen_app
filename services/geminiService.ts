@@ -1,16 +1,15 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
-// Constants for Models - Aggressive Fallback List
+// Constants for Models
 const TEXT_MODEL = 'gemini-2.5-flash';
 
-// Prioritized list of models to try for images. 
-// We include experimental models as they often have different quota pools or stability profiles.
+// Prioritized list of models to try for images.
+// If one returns 429 (Quota), we immediately switch to the next.
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.5-flash-image',      // Primary: Fast, Preview
-  'gemini-2.0-flash-exp',        // Secondary: Experimental often works when Preview fails
-  'imagen-3.0-generate-001',     // Tertiary: High Quality, Strict Quota
-  'gemini-3-pro-image-preview'   // Fallback: Heavy duty, might be slower
+  'gemini-2.5-flash-image',      // Primary: Standard Preview
+  'imagen-3.0-generate-001',     // Secondary: High Quality (often separate quota)
+  'gemini-3-pro-image-preview',  // Backup: Heavy duty
 ];
 
 export interface ImageGenerationResult {
@@ -48,11 +47,12 @@ async function retryWithBackoff<T>(
   try {
     return await fn();
   } catch (error: any) {
-    if (retries <= 0) throw error;
+    // Don't retry if we have no retries left OR if it's a 429 (Quota Exceeded).
+    // For 429, we want to fail fast so the main loop can switch to a different model.
+    if (retries <= 0 || error?.status === 429 || error?.code === 429) throw error;
     
     const shouldRetry = 
       (error?.status && error.status >= 500) || 
-      error?.status === 429 ||
       error?.message?.includes('xhr') || 
       error?.message?.includes('fetch') ||
       error?.message?.includes('500') ||
@@ -60,7 +60,6 @@ async function retryWithBackoff<T>(
       (error?.error?.code === 500);
 
     if (shouldRetry) {
-      // console.warn(`Retrying... attempts left: ${retries}`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return retryWithBackoff(fn, retries - 1, delay * 1.5);
     }
@@ -205,7 +204,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
-                config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, // Removed aspectRatio to reduce errors
+                config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
             }), 1, 1000);
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
@@ -228,10 +227,19 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
         }
 
       } catch (error: any) {
-          console.warn(`Model ${modelName} failed:`, error.message || error);
-          if (error.message) lastError = error.message;
-          if (error.status) lastError = `Status ${error.status}`;
-          // Continue to next model
+          const status = error.status || error.code;
+          const msg = error.message || String(error);
+          console.warn(`Model ${modelName} failed:`, msg);
+          
+          if (status === 429) {
+             lastError = "429 Quota Exceeded";
+             // Don't sleep too long for 429, just switch model immediately
+             await new Promise(resolve => setTimeout(resolve, 500));
+          } else {
+             lastError = msg;
+             // For other errors, sleep a bit before trying next model
+             await new Promise(resolve => setTimeout(resolve, 1000));
+          }
       }
   }
 
