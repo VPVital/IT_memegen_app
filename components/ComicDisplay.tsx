@@ -8,6 +8,8 @@ interface ComicDisplayProps {
   comic: ComicData;
 }
 
+const MAX_CAPTION_LENGTH = 120;
+
 export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
   const comicRef = useRef<HTMLDivElement>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -127,9 +129,13 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
                 <textarea
                   value={captions[idx] || ""}
                   onChange={(e) => handleCaptionChange(idx, e.target.value)}
+                  maxLength={MAX_CAPTION_LENGTH}
                   className="w-full h-full text-black font-sans text-xs sm:text-[10px] leading-snug text-center font-medium bg-transparent resize-none focus:outline-none focus:bg-yellow-50 p-1 rounded scrollbar-hide"
                   rows={4}
                 />
+                 <div className={`absolute bottom-1 right-1 text-[8px] font-mono opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 px-1 rounded pointer-events-none ${ (captions[idx]?.length || 0) > MAX_CAPTION_LENGTH * 0.9 ? 'text-red-500 opacity-100' : 'text-gray-400' }`}>
+                   {(captions[idx]?.length || 0)}/{MAX_CAPTION_LENGTH}
+                 </div>
               </div>
             </div>
           ))}

@@ -1,4 +1,4 @@
-import React, { Component, useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -71,6 +71,9 @@ const RANDOM_PROMPTS = [
   "Деплой упал за 5 минут до демо с заказчиком",
   "Когда бэкенд прислал JSON с другим форматом"
 ];
+
+// Constants
+const MAX_PROMPT_LENGTH = 300;
 
 // Union type for history items
 type HistoryItem = MemeData | ComicData;
@@ -505,11 +508,15 @@ function App() {
                         value={topic}
                         onChange={(e) => setTopic(e.target.value)}
                         placeholder={activeTab === GenerationType.SINGLE ? "Джун удалил базу данных..." : "Диалог между PM и разработчиком..."}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-3 pl-10 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 transition-all shadow-inner text-sm resize-none h-24 lg:h-28"
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-3 pl-10 pb-6 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 transition-all shadow-inner text-sm resize-none h-24 lg:h-28"
                         required
                         disabled={isGenerating}
+                        maxLength={MAX_PROMPT_LENGTH}
                       />
                       <Sparkles className="absolute left-3 top-3.5 text-gray-500 group-focus-within:text-primary-500 transition-colors" size={16} />
+                      <div className={`absolute bottom-2 right-3 text-[10px] font-mono transition-colors ${topic.length > MAX_PROMPT_LENGTH * 0.9 ? 'text-red-400' : 'text-gray-600'}`}>
+                        {topic.length}/{MAX_PROMPT_LENGTH}
+                      </div>
                     </div>
                   </div>
 

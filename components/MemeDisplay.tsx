@@ -8,6 +8,9 @@ interface MemeDisplayProps {
   meme: MemeData;
 }
 
+const MAX_TOP_TEXT = 100;
+const MAX_BOTTOM_TEXT = 200;
+
 export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
   const memeRef = useRef<HTMLDivElement>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -113,10 +116,11 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
         >
           
           {/* Top Text Area (The Setup) */}
-          <div className="p-4 lg:p-6 pb-2 bg-white">
+          <div className="p-4 lg:p-6 pb-2 bg-white relative group/top">
              <textarea
               value={topText}
               onChange={(e) => setTopText(e.target.value)}
+              maxLength={MAX_TOP_TEXT}
               className="w-full bg-transparent text-left text-xl md:text-3xl font-sans font-extrabold text-black resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden"
               // Auto-resize height logic
               style={{ minHeight: '60px' }}
@@ -128,6 +132,9 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
               rows={Math.max(2, topText.split('\n').length)}
               placeholder="Текст шутки..."
             />
+            <div className={`absolute top-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/top:opacity-100 transition-opacity pointer-events-none ${topText.length > MAX_TOP_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
+                {topText.length}/{MAX_TOP_TEXT}
+            </div>
           </div>
 
           {/* The Image Container */}
@@ -142,10 +149,11 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
           
           {/* Bottom Text Area (The Punchline/Context) */}
            {bottomText && (
-            <div className="px-4 lg:px-6 py-4 bg-white">
+            <div className="px-4 lg:px-6 py-4 bg-white relative group/bottom">
                <textarea
                 value={bottomText}
                 onChange={(e) => setBottomText(e.target.value)}
+                maxLength={MAX_BOTTOM_TEXT}
                 className="w-full bg-transparent text-left text-base md:text-xl font-sans text-gray-700 resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden"
                 onInput={(e) => {
                     const target = e.target as HTMLTextAreaElement;
@@ -155,6 +163,9 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
                 rows={Math.max(1, bottomText.split('\n').length)}
                 placeholder="Дополнительный текст..."
               />
+               <div className={`absolute bottom-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/bottom:opacity-100 transition-opacity pointer-events-none ${bottomText.length > MAX_BOTTOM_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
+                 {bottomText.length}/{MAX_BOTTOM_TEXT}
+              </div>
             </div>
           )}
 
