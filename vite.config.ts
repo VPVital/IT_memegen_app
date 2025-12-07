@@ -11,8 +11,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     define: {
       // Vital: This allows the existing code using process.env.API_KEY to work
-      // by injecting the VITE_API_KEY value from Vercel/environment at build time.
-      'process.env.API_KEY': JSON.stringify(env.VITE_API_KEY),
+      // by injecting the VITE_API_KEY (standard) or API_KEY (fallback) value from Vercel/environment.
+      'process.env.API_KEY': JSON.stringify(env.VITE_API_KEY || env.API_KEY),
     },
   };
 });

@@ -3,7 +3,8 @@ import { ComicData, MemeData, GenerationType } from "../types";
 
 // Constants for Models
 const TEXT_MODEL = 'gemini-2.5-flash';
-const IMAGE_MODEL = 'gemini-2.5-flash-image';
+const IMAGE_MODEL_FAST = 'gemini-2.5-flash-image';
+const IMAGE_MODEL_QUALITY = 'imagen-3.0-generate-001';
 
 // Helper to strip markdown formatting and find JSON object
 const cleanJson = (text: string): string => {
@@ -16,7 +17,6 @@ const cleanJson = (text: string): string => {
   }
 
   // 2. If no code block, try to find the first outer curly braces
-  // This approach is more robust for single JSON objects than regex when nested braces exist
   const startIndex = text.indexOf('{');
   const endIndex = text.lastIndexOf('}');
   
@@ -38,19 +38,19 @@ async function retryWithBackoff<T>(
   } catch (error: any) {
     if (retries <= 0) throw error;
     
-    // Check for network/server errors (5xx) or specific XHR errors or Rate Limits (429)
-    // Extended to handle complex nested error objects returned by some Google API endpoints
+    // Check for network/server errors (5xx), specific XHR errors, or Rate Limits (429)
+    // Extended to handle complex nested error objects from Google API
     const shouldRetry = 
-      error.status >= 500 || 
-      error.status === 429 ||
-      error.message?.includes('xhr error') || 
-      error.message?.includes('fetch failed') ||
-      error.message?.includes('NetworkError') ||
-      error.message?.includes('500') ||
-      error.message?.includes('503') ||
+      (error?.status && error.status >= 500) || 
+      error?.status === 429 ||
+      error?.message?.includes('xhr error') || 
+      error?.message?.includes('fetch failed') ||
+      error?.message?.includes('NetworkError') ||
+      error?.message?.includes('500') ||
+      error?.message?.includes('503') ||
       // Handle nested error object structure: { error: { code: 500, message: ... } }
-      (error.error && error.error.code === 500) ||
-      (error.error && error.error.message && error.error.message.includes('xhr error'));
+      (error?.error?.code === 500) ||
+      (error?.error?.message?.includes('xhr error'));
 
     if (shouldRetry) {
       console.warn(`API call failed, retrying in ${delay}ms... (${retries} attempts left). Error:`, error);
@@ -186,13 +186,15 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
 
 /**
  * Generates an image based on a prompt.
+ * Uses a robust fallback strategy: Tries Flash (fast) first, then Imagen (quality/stable).
  */
 export const generateImageFromPrompt = async (fullPrompt: string): Promise<string | undefined> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+  // 1. Attempt with Flash Image (Fast, but sometimes unstable on Preview)
   try {
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-      model: IMAGE_MODEL,
+      model: IMAGE_MODEL_FAST,
       contents: {
         parts: [{ text: fullPrompt }],
       },
@@ -201,17 +203,38 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<strin
           aspectRatio: "1:1", 
         }
       }
-    }), 3, 2000); // 3 retries, start with 2s delay
+    }), 1, 1000); // Only 1 retry for flash to fail fast
 
-    // Extract image
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
         return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
   } catch (error) {
-    console.error("Image generation failed", error);
+    console.warn("Primary image model failed, switching to fallback (Imagen 3)...", error);
+  }
+
+  // 2. Fallback to Imagen 3 (More stable, higher quality, stricter quota)
+  try {
+    console.log("Attempting fallback generation with Imagen 3...");
+    const response = await retryWithBackoff<any>(() => ai.models.generateImages({
+        model: IMAGE_MODEL_QUALITY,
+        prompt: fullPrompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: 'image/jpeg',
+          aspectRatio: '1:1',
+        },
+    }), 2, 3000); // 2 retries for fallback
+
+    const base64String = response.generatedImages?.[0]?.image?.imageBytes;
+    if (base64String) {
+      return `data:image/jpeg;base64,${base64String}`;
+    }
+  } catch (error) {
+    console.error("Fallback image generation failed", error);
     return undefined;
   }
+
   return undefined;
 };

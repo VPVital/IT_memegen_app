@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ErrorInfo, ReactNode, Component } from 'react';
+import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,11 +17,14 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public state: ErrorBoundaryState = {
-    hasError: false,
-    error: null
-  };
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = {
+      hasError: false,
+      error: null
+    };
+  }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
@@ -259,10 +262,10 @@ function App() {
         // 2. Generate Image
         if (signal.aborted) return;
         setStatusMessage('Rendering meme image...');
-        // Increased timeout to 60s to account for potential retries
+        // Increased timeout to 90s to account for potential retries / fallback models
         const imageUrl = await withTimeout(
             generateImageFromPrompt(textData.visualPrompt + " high quality, funny meme image style"),
-            60000,
+            90000, 
             undefined
         );
         
@@ -356,10 +359,10 @@ function App() {
           let imageUrl;
           
           try {
-            // Add safety timeout for each image generation (60s to allow retries)
+            // Increased timeout to 90s for image fallback
             imageUrl = await withTimeout(
                 generateImageFromPrompt(fullPrompt),
-                60000, 
+                90000, 
                 undefined
             );
           } catch (err) {
