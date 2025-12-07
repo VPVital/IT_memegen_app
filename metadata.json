@@ -1,0 +1,5 @@
+{
+  "name": "IT Meme Generator",
+  "description": "Generates IT-themed memes and comic strips using Gemini AI.",
+  "requestFramePermissions": []
+}
