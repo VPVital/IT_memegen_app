@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ErrorInfo, ReactNode, Component } from 'react';
+import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -104,6 +104,7 @@ function App() {
   // Ref for aborting operations
   const abortControllerRef = useRef<AbortController | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const sidebarContentRef = useRef<HTMLDivElement>(null);
   
   // State for Single Meme
   const [currentMeme, setCurrentMeme] = useState<MemeData | null>(null);
@@ -203,6 +204,21 @@ function App() {
     setIsGenerating(false);
     setCoolDownSeconds(0);
     setStatusMessage('Aborted by user');
+  };
+
+  const handleLogoClick = () => {
+    // Scroll Main Window (Mobile)
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    // Scroll Results Panel (Desktop)
+    if (resultsRef.current) {
+        resultsRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // Scroll Sidebar Content (Desktop)
+    if (sidebarContentRef.current) {
+        sidebarContentRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
@@ -399,8 +415,12 @@ function App() {
         {/* Header */}
         <header className="flex-none border-b border-gray-800 bg-gray-950/90 backdrop-blur-md z-50 sticky top-0 lg:static">
           <div className="w-full px-4 lg:px-6 h-14 lg:h-16 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 lg:w-8 lg:h-8 bg-primary-600 rounded flex items-center justify-center shadow-[0_0_10px_rgba(37,99,235,0.5)] border border-primary-500">
+            <div 
+                onClick={handleLogoClick}
+                className="flex items-center gap-2 cursor-pointer transition-opacity hover:opacity-80 group"
+                title="Scroll to Top"
+            >
+              <div className="w-7 h-7 lg:w-8 lg:h-8 bg-primary-600 rounded flex items-center justify-center shadow-[0_0_10px_rgba(37,99,235,0.5)] border border-primary-500 group-hover:shadow-[0_0_15px_rgba(37,99,235,0.8)] transition-shadow">
                 <Terminal className="text-white" size={16} />
               </div>
               <h1 className="text-base lg:text-lg font-bold tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-500 bg-clip-text text-transparent font-mono">
@@ -427,7 +447,10 @@ function App() {
           <aside className="w-full lg:w-[450px] flex-none border-b lg:border-b-0 lg:border-r border-gray-800 bg-gray-950/80 backdrop-blur-sm flex flex-col z-20">
             
             {/* Scrollable controls area */}
-            <div className="lg:flex-1 lg:overflow-y-auto p-4 lg:p-6 space-y-6 lg:space-y-8 scrollbar-hide">
+            <div 
+                ref={sidebarContentRef}
+                className="lg:flex-1 lg:overflow-y-auto p-4 lg:p-6 space-y-6 lg:space-y-8 scrollbar-hide"
+            >
               
               {/* Intro Snippet - Hide on small mobile to save space */}
               <div className="hidden sm:block">
