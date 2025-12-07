@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
+import React, { Component, useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = {

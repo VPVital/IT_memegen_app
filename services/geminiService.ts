@@ -3,8 +3,9 @@ import { ComicData, MemeData, GenerationType } from "../types";
 
 // Constants for Models
 const TEXT_MODEL = 'gemini-2.5-flash';
-const IMAGE_MODEL_FAST = 'gemini-2.5-flash-image';
-const IMAGE_MODEL_QUALITY = 'imagen-3.0-generate-001';
+const IMAGE_MODEL_FAST = 'gemini-2.5-flash-image'; // Preview, Fast, sometimes 500s
+const IMAGE_MODEL_QUALITY = 'imagen-3.0-generate-001'; // Stable, Strict Quota
+const IMAGE_MODEL_BACKUP = 'gemini-3-pro-image-preview'; // Powerful, Backup
 
 // Helper to strip markdown formatting and find JSON object
 const cleanJson = (text: string): string => {
@@ -39,7 +40,6 @@ async function retryWithBackoff<T>(
     if (retries <= 0) throw error;
     
     // Check for network/server errors (5xx), specific XHR errors, or Rate Limits (429)
-    // Extended to handle complex nested error objects from Google API
     const shouldRetry = 
       (error?.status && error.status >= 500) || 
       error?.status === 429 ||
@@ -48,7 +48,6 @@ async function retryWithBackoff<T>(
       error?.message?.includes('NetworkError') ||
       error?.message?.includes('500') ||
       error?.message?.includes('503') ||
-      // Handle nested error object structure: { error: { code: 500, message: ... } }
       (error?.error?.code === 500) ||
       (error?.error?.message?.includes('xhr error'));
 
@@ -166,7 +165,6 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
         json = { panels: [] };
     }
 
-    // Ensure panels is an array to prevent .map crashes in App.tsx
     const panels = Array.isArray(json.panels) ? json.panels : [];
 
     return {
@@ -185,25 +183,20 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
 };
 
 /**
- * Generates an image based on a prompt.
- * Uses a robust fallback strategy: Tries Flash (fast) first, then Imagen (quality/stable).
+ * Generates an image based on a prompt with a 3-layer fallback strategy.
  */
 export const generateImageFromPrompt = async (fullPrompt: string): Promise<string | undefined> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  // 1. Attempt with Flash Image (Fast, but sometimes unstable on Preview)
+  // STRATEGY 1: Flash Image (Fastest, Preview)
+  // Note: Removed aspectRatio config to maximize success rate on preview models
   try {
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: IMAGE_MODEL_FAST,
       contents: {
         parts: [{ text: fullPrompt }],
       },
-      config: {
-        imageConfig: {
-          aspectRatio: "1:1", 
-        }
-      }
-    }), 1, 1000); // Only 1 retry for flash to fail fast
+    }), 1, 1000); // 1 retry
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
@@ -211,12 +204,11 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<strin
       }
     }
   } catch (error) {
-    console.warn("Primary image model failed, switching to fallback (Imagen 3)...", error);
+    console.warn(`Layer 1 (${IMAGE_MODEL_FAST}) failed. Switching to Layer 2...`, error);
   }
 
-  // 2. Fallback to Imagen 3 (More stable, higher quality, stricter quota)
+  // STRATEGY 2: Imagen 3 (Stable, High Quality)
   try {
-    console.log("Attempting fallback generation with Imagen 3...");
     const response = await retryWithBackoff<any>(() => ai.models.generateImages({
         model: IMAGE_MODEL_QUALITY,
         prompt: fullPrompt,
@@ -225,15 +217,32 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<strin
           outputMimeType: 'image/jpeg',
           aspectRatio: '1:1',
         },
-    }), 2, 3000); // 2 retries for fallback
+    }), 1, 2000); 
 
     const base64String = response.generatedImages?.[0]?.image?.imageBytes;
     if (base64String) {
       return `data:image/jpeg;base64,${base64String}`;
     }
   } catch (error) {
-    console.error("Fallback image generation failed", error);
-    return undefined;
+    console.warn(`Layer 2 (${IMAGE_MODEL_QUALITY}) failed. Switching to Layer 3...`, error);
+  }
+
+  // STRATEGY 3: Gemini Pro Image (Ultimate Backup)
+  try {
+    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+      model: IMAGE_MODEL_BACKUP,
+      contents: {
+        parts: [{ text: fullPrompt }],
+      },
+    }), 1, 3000);
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+  } catch (error) {
+    console.error(`All image generation layers failed.`, error);
   }
 
   return undefined;
