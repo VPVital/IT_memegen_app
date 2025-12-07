@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, ErrorInfo, ReactNode, Component } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -231,7 +231,7 @@ function App() {
         // 1. Generate Text content
         if (signal.aborted) return;
         setStatusMessage('Generating witty captions...');
-        const textData = await withTimeout(generateMemeText(topic), 20000, {
+        const textData = await withTimeout(generateMemeText(topic), 30000, {
              type: GenerationType.SINGLE,
              visualPrompt: "Error generating prompt",
              topText: "Error",
@@ -243,9 +243,10 @@ function App() {
         // 2. Generate Image
         if (signal.aborted) return;
         setStatusMessage('Rendering meme image...');
+        // Increased timeout to 60s to account for potential retries
         const imageUrl = await withTimeout(
             generateImageFromPrompt(textData.visualPrompt + " high quality, funny meme image style"),
-            40000,
+            60000,
             undefined
         );
         
@@ -286,7 +287,7 @@ function App() {
         setStatusMessage('Writing comic script...');
         const scriptData = await withTimeout(
             generateComicScript(topic, panelCount),
-            25000,
+            40000,
             { type: GenerationType.COMIC, topic, panels: [] }
         );
         
@@ -339,10 +340,10 @@ function App() {
           let imageUrl;
           
           try {
-            // Add safety timeout for each image generation
+            // Add safety timeout for each image generation (60s to allow retries)
             imageUrl = await withTimeout(
                 generateImageFromPrompt(fullPrompt),
-                45000, // 45s timeout per image
+                60000, 
                 undefined
             );
           } catch (err) {

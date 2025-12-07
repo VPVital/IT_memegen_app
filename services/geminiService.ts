@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
 // Constants for Models
@@ -27,11 +27,45 @@ const cleanJson = (text: string): string => {
   return text;
 };
 
+// Helper for retrying async operations with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>, 
+  retries: number = 3, 
+  delay: number = 2000
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries <= 0) throw error;
+    
+    // Check for network/server errors (5xx) or specific XHR errors or Rate Limits (429)
+    // Extended to handle complex nested error objects returned by some Google API endpoints
+    const shouldRetry = 
+      error.status >= 500 || 
+      error.status === 429 ||
+      error.message?.includes('xhr error') || 
+      error.message?.includes('fetch failed') ||
+      error.message?.includes('NetworkError') ||
+      error.message?.includes('500') ||
+      error.message?.includes('503') ||
+      // Handle nested error object structure: { error: { code: 500, message: ... } }
+      (error.error && error.error.code === 500) ||
+      (error.error && error.error.message && error.error.message.includes('xhr error'));
+
+    if (shouldRetry) {
+      console.warn(`API call failed, retrying in ${delay}ms... (${retries} attempts left). Error:`, error);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithBackoff(fn, retries - 1, delay * 2);
+    }
+    
+    throw error;
+  }
+}
+
 /**
  * Generates the text content (prompts and captions) for a single meme.
  */
 export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'id' | 'isLoading' | 'timestamp'>> => {
-  // Create a fresh instance for every request to avoid state issues
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `Generate a witty, sarcastic IT/Programmer meme idea about: "${topic}".
@@ -45,7 +79,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
   Keep visualPrompt in English.`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
       config: {
@@ -60,7 +94,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    });
+    }));
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -87,7 +121,6 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
  * Generates the script for a 3-4 panel comic strip.
  */
 export const generateComicScript = async (topic: string, panelCount: number): Promise<Omit<ComicData, 'id' | 'isLoading' | 'styleLabel' | 'timestamp'>> => {
-  // Create a fresh instance for every request
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `Create a funny ${panelCount}-panel comic strip script about: "${topic}" for IT professionals.
@@ -100,7 +133,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
   Ensure there is a narrative arc with a setup and a punchline in the final panel.`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
       config: {
@@ -122,7 +155,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
           },
         },
       },
-    });
+    }));
 
     const rawText = response.text || '{}';
     let json;
@@ -146,7 +179,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
     return {
       type: GenerationType.COMIC,
       topic,
-      panels: [], // Return empty array to handle gracefully in UI
+      panels: [], 
     };
   }
 };
@@ -155,21 +188,20 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
  * Generates an image based on a prompt.
  */
 export const generateImageFromPrompt = async (fullPrompt: string): Promise<string | undefined> => {
-  // Create a fresh instance for every request
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: {
         parts: [{ text: fullPrompt }],
       },
       config: {
         imageConfig: {
-          aspectRatio: "1:1", // Square for memes usually
+          aspectRatio: "1:1", 
         }
       }
-    });
+    }), 3, 2000); // 3 retries, start with 2s delay
 
     // Extract image
     for (const part of response.candidates?.[0]?.content?.parts || []) {

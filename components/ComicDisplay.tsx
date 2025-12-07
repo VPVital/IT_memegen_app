@@ -45,16 +45,59 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
     setCaptions(newCaptions);
   };
 
+  // Helper function to handle html2canvas capture with text preservation
+  const generateCanvas = async (element: HTMLElement) => {
+    return await html2canvas(element, {
+      scale: 2,
+      backgroundColor: null,
+      useCORS: true,
+      logging: false,
+      onclone: (clonedDoc) => {
+        // Critical Fix for Textareas:
+        // Replace textareas with divs in the cloned document so html2canvas renders full text.
+        const textAreas = clonedDoc.querySelectorAll('textarea');
+        textAreas.forEach((textArea) => {
+            const div = clonedDoc.createElement('div');
+            div.innerText = textArea.value;
+            
+            // Copy computed styles to match appearance exactly
+            const computed = window.getComputedStyle(textArea);
+            div.style.font = computed.font;
+            div.style.fontFamily = computed.fontFamily;
+            div.style.fontSize = computed.fontSize;
+            div.style.fontWeight = computed.fontWeight;
+            div.style.lineHeight = computed.lineHeight;
+            div.style.textAlign = computed.textAlign;
+            div.style.color = computed.color;
+            div.style.padding = computed.padding;
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.wordBreak = 'break-word';
+            div.style.width = '100%';
+            div.style.height = 'auto'; // Allow expansion
+            div.style.minHeight = computed.height; // Maintain minimum layout size
+            div.style.display = 'flex';
+            div.style.alignItems = 'center'; // Center vertically like the textarea parent
+            div.style.justifyContent = 'center';
+            div.style.background = 'transparent';
+            div.style.border = 'none';
+            div.style.overflow = 'visible';
+            
+            if (textArea.parentNode) {
+                // Ensure the parent container allows expansion if needed, or matches layout
+                (textArea.parentNode as HTMLElement).style.height = 'auto';
+                (textArea.parentNode as HTMLElement).style.minHeight = computed.height;
+                textArea.parentNode.replaceChild(div, textArea);
+            }
+        });
+      }
+    });
+  };
+
   const handleDownload = async () => {
     if (!comicRef.current) return;
     setIsDownloading(true);
     try {
-      const canvas = await html2canvas(comicRef.current, {
-        scale: 2,
-        backgroundColor: null,
-        useCORS: true,
-        logging: false
-      });
+      const canvas = await generateCanvas(comicRef.current);
       const image = canvas.toDataURL("image/png");
       const link = document.createElement("a");
       link.href = image;
@@ -70,7 +113,7 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
   const handleCopy = async () => {
     if (!comicRef.current) return;
     try {
-      const canvas = await html2canvas(comicRef.current, { scale: 2, useCORS: true });
+      const canvas = await generateCanvas(comicRef.current);
       canvas.toBlob(async (blob) => {
         if (!blob) return;
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
