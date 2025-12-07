@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect, ErrorInfo, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, ErrorInfo, ReactNode, Component } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
 import { ComicDisplay } from './components/ComicDisplay';
 import { TerminalLoader } from './components/TerminalLoader';
 import { generateMemeText, generateImageFromPrompt, generateComicScript } from './services/geminiService';
-import { GenerationType, MemeData, ComicData, COMIC_STYLES } from './types';
+import { GenerationType, MemeData, ComicData, ComicStyle, COMIC_STYLES } from './types';
 
 interface ErrorBoundaryProps {
   children?: ReactNode;
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
