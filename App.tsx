@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, ReactNode, ErrorInfo } from 'react';
-import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
+import React, { Component, useState, useRef, useEffect, ReactNode, ErrorInfo } from 'react';
+import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle, Key } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
 import { ComicDisplay } from './components/ComicDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -121,6 +121,7 @@ function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [coolDownSeconds, setCoolDownSeconds] = useState(0);
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState(false);
   
   // Ref for aborting operations
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -132,6 +133,14 @@ function App() {
 
   // State for Comic
   const [currentComic, setCurrentComic] = useState<ComicData | null>(null);
+
+  // Check API Key on mount
+  useEffect(() => {
+    const key = process.env.API_KEY;
+    if (!key || key.includes('undefined') || key.includes('YOUR_API_KEY')) {
+      setApiKeyError(true);
+    }
+  }, []);
 
   // Load history from local storage on mount
   useEffect(() => {
@@ -453,6 +462,14 @@ function App() {
         {/* Background Tech Grid */}
         <div className="absolute inset-0 z-0 bg-grid-pattern bg-grid opacity-20 pointer-events-none fixed"></div>
 
+        {/* API Key Error Banner */}
+        {apiKeyError && (
+          <div className="bg-red-900/90 text-red-100 px-4 py-2 text-center text-xs md:text-sm font-bold border-b border-red-700 z-[60] flex items-center justify-center gap-2 animate-pulse">
+            <Key size={16} />
+            <span>CRITICAL ERROR: API Key missing or invalid. Check Vercel Environment Variables.</span>
+          </div>
+        )}
+
         {/* Header */}
         <header className="flex-none border-b border-gray-800 bg-gray-950/90 backdrop-blur-md z-50 sticky top-0 lg:static">
           <div className="w-full px-4 lg:px-6 h-14 lg:h-16 flex items-center justify-between">
@@ -656,7 +673,7 @@ function App() {
             </div>
 
             <div className="flex-none p-3 lg:p-4 border-t border-gray-800 text-center bg-gray-950 hidden lg:block">
-              <p className="text-[10px] text-gray-600 font-mono">Powered by Google Gemini 2.0 Flash</p>
+              <p className="text-[10px] text-gray-600 font-mono">Powered by Google Gemini 2.5 Flash</p>
             </div>
           </aside>
 

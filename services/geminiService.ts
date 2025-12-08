@@ -2,16 +2,14 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
 // Constants for Models
-// Use 2.0 Flash as the stable base for text
-const TEXT_MODEL = 'gemini-2.0-flash';
+// Use 2.5 Flash as the stable base for text
+const TEXT_MODEL = 'gemini-2.5-flash';
 
 // Prioritized list of models to try for images.
-// Updated to prioritize stable models over experimental/preview ones that might 404.
-// Removed 'imagen-3.0-generate-001' as it often returns 404 on standard keys.
-// 'gemini-2.0-flash' is multimodal and capable of generating images.
+// 'gemini-2.0-flash' is removed because it is primarily a text model and does not consistently generate inline images.
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.0-flash',            // Stable Flash - Reliable
-  'gemini-2.5-flash-image',      // Specialized Image Preview
+  'gemini-2.5-flash-image',      // Specialized Image Model (Nano Banana) - Primary
+  'imagen-4.0-generate-001',     // Fallback Standard Imagen
 ];
 
 export interface ImageGenerationResult {
@@ -208,7 +206,8 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
         console.log(`Attempting image gen with ${modelName}...`);
         
         if (modelName.includes('imagen')) {
-             // Retries: 3, Initial Delay: 4s (Slower start for images)
+             // Imagen Models (generateImages)
+             // Retries: 3, Initial Delay: 4s
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
@@ -221,7 +220,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             }
 
         } else {
-            // Flash/Pro models (Multimodal endpoints)
+            // Flash/Banana Models (generateContent)
             // Retries: 3, Initial Delay: 4s
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
@@ -236,7 +235,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             }
             
             if (!foundImage && response.text) {
-               console.warn(`Model ${modelName} returned text instead of image:`, response.text.substring(0, 50));
+               console.warn(`Model ${modelName} returned text instead of image.`);
                throw new Error(`Model returned text, not image`);
             }
         }
@@ -249,11 +248,13 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
           
           if (status === 429 || msg.includes('429')) {
              lastError = "429 Quota Exceeded";
-             console.warn(`Model ${modelName} 429 exhausted after retries. Switching models in 2s...`);
+             console.warn(`Model ${modelName} 429 exhausted. Switching models in 2s...`);
              await new Promise(resolve => setTimeout(resolve, 2000));
           } else if (status === 404 || msg.includes('404')) {
-             // Model not found or not enabled
              console.warn(`Model ${modelName} not found (404). Switching...`);
+          } else if (status === 403 || msg.includes('403')) {
+             lastError = "403 Permission Denied (Check API Key)";
+             console.warn(`Model ${modelName} 403 Permission Denied.`);
           } else {
              console.warn(`Model ${modelName} failed with ${msg}. Switching...`);
           }
