@@ -7,10 +7,11 @@ const TEXT_MODEL = 'gemini-2.0-flash';
 
 // Prioritized list of models to try for images.
 // Updated to prioritize stable models over experimental/preview ones that might 404.
+// Removed 'imagen-3.0-generate-001' as it often returns 404 on standard keys.
+// 'gemini-2.0-flash' is multimodal and capable of generating images.
 const IMAGE_MODELS_PRIORITY = [
-  'imagen-3.0-generate-001',     // Standard Imagen - Most reliable for images
-  'gemini-2.0-flash-exp',        // Experimental Flash
-  'gemini-2.5-flash-image',      // Preview (might 404 on some keys)
+  'gemini-2.0-flash',            // Stable Flash - Reliable
+  'gemini-2.5-flash-image',      // Specialized Image Preview
 ];
 
 export interface ImageGenerationResult {
@@ -224,15 +225,23 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
 
         } else {
             // Flash/Pro models (Multimodal endpoints)
+            // Note: Some Flash models might just return text describing the image if not prompted correctly,
+            // but usually 'generateContent' with image-capable models works.
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
             }), 1, 5000);
 
+            let foundImage = false;
             for (const part of response.candidates?.[0]?.content?.parts || []) {
                 if (part.inlineData) {
                     return { imageUrl: `data:image/png;base64,${part.inlineData.data}` };
                 }
+            }
+            
+            if (!foundImage && response.text) {
+               console.warn(`Model ${modelName} returned text instead of image:`, response.text.substring(0, 50));
+               throw new Error(`Model returned text, not image`);
             }
         }
 

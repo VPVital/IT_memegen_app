@@ -18,10 +18,13 @@ interface ErrorBoundaryState {
 
 // --- Error Boundary Component ---
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public state: ErrorBoundaryState = {
-    hasError: false,
-    error: null
-  };
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = {
+      hasError: false,
+      error: null
+    };
+  }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
@@ -81,6 +84,26 @@ type HistoryItem = MemeData | ComicData;
 // Helper function for artificial delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Helper to extract clean message from JSON error string
+const extractErrorMessage = (rawError: string): string => {
+  if (!rawError) return "Unknown Error";
+  try {
+    // Attempt to parse if it looks like JSON
+    if (rawError.trim().startsWith('{')) {
+        const parsed = JSON.parse(rawError);
+        if (parsed.error) {
+            if (typeof parsed.error === 'string') return parsed.error;
+            if (parsed.error.message) return parsed.error.message;
+            if (parsed.error.code) return `Error Code: ${parsed.error.code}`;
+        }
+        return "API Error";
+    }
+  } catch (e) {
+    // If parse fails, just return the raw string (truncated)
+  }
+  return rawError.length > 50 ? rawError.substring(0, 50) + "..." : rawError;
+};
+
 // Timeout wrapper for API calls to prevent hanging
 const withTimeout = <T,>(promise: Promise<T>, ms: number, fallbackValue: T): Promise<T> => {
   return Promise.race([
@@ -100,6 +123,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('System Idle');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [coolDownSeconds, setCoolDownSeconds] = useState(0);
+  const [isConfirmingClear, setIsConfirmingClear] = useState(false);
   
   // Ref for aborting operations
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -164,9 +188,14 @@ function App() {
     });
   };
 
-  const clearHistory = () => {
-    if(confirm('Очистить историю генераций?')) {
+  const handleClearHistory = () => {
+    if (isConfirmingClear) {
       setHistory([]);
+      setIsConfirmingClear(false);
+    } else {
+      setIsConfirmingClear(true);
+      // Reset confirmation state after 3 seconds if user doesn't confirm
+      setTimeout(() => setIsConfirmingClear(false), 3000);
     }
   };
 
@@ -273,14 +302,8 @@ function App() {
         // If failed or returned raw error JSON, use placeholder
         if (!finalImageUrl || finalImageUrl.includes('{"error"') || finalImageUrl.length < 50) {
             const errorReason = imageResult.error || "Render Failed";
-            // Clean up error message if it's JSON
-            let cleanError = errorReason;
-            try {
-               const parsed = JSON.parse(errorReason);
-               if (parsed.error && parsed.error.message) cleanError = parsed.error.message;
-            } catch(e) {}
-            
-            finalImageUrl = `https://placehold.co/800x800/1f2937/ffffff?text=${encodeURIComponent(cleanError.slice(0, 30))}&font=roboto`;
+            const cleanError = extractErrorMessage(errorReason);
+            finalImageUrl = `https://placehold.co/800x800/1f2937/ffffff?text=${encodeURIComponent(cleanError)}&font=roboto`;
         }
         
         const newMeme: MemeData = {
@@ -390,16 +413,9 @@ function App() {
           // Check for valid image URL (not empty, not error JSON)
           if (!panelImageUrl || panelImageUrl.includes('{"error"') || panelImageUrl.length < 50) {
              const errorText = imageResult.error || `Panel ${i+1} Error`;
+             const cleanError = extractErrorMessage(errorText);
              console.warn(`Panel ${i+1} failed: ${errorText}`);
-             
-             let cleanError = errorText;
-             try {
-                const parsed = JSON.parse(errorText);
-                if (parsed.error && parsed.error.message) cleanError = parsed.error.message;
-                else if (parsed.error && parsed.error.code) cleanError = `Error ${parsed.error.code}`;
-             } catch(e) {}
-
-             panelImageUrl = `https://placehold.co/600x600/ffffff/000000?text=${encodeURIComponent(cleanError.slice(0, 20))}&font=roboto`;
+             panelImageUrl = `https://placehold.co/600x600/ffffff/000000?text=${encodeURIComponent(cleanError)}&font=roboto`;
           }
 
           // Update local state safely
@@ -600,8 +616,16 @@ function App() {
                     <h3 className="text-xs font-semibold text-gray-500 font-mono uppercase tracking-wider flex items-center gap-2">
                       <History size={12} /> Session Logs
                     </h3>
-                    <button onClick={clearHistory} className="text-[10px] text-red-500/70 hover:text-red-500 flex items-center gap-1 transition-colors">
-                      <Trash2 size={10} /> clear
+                    <button 
+                      onClick={handleClearHistory}
+                      className={`text-[10px] flex items-center gap-1 transition-all duration-200 px-2 py-1 rounded ${
+                        isConfirmingClear 
+                          ? 'bg-red-900/40 text-red-300 font-bold border border-red-800' 
+                          : 'text-red-500/70 hover:text-red-500 hover:bg-gray-800'
+                      }`}
+                      title={isConfirmingClear ? "Click again to confirm" : "Clear history"}
+                    >
+                      <Trash2 size={10} /> {isConfirmingClear ? 'Confirm Clear?' : 'clear'}
                     </button>
                   </div>
                   <div className="border border-gray-800 rounded-lg bg-gray-900/50 overflow-hidden max-h-[200px] lg:max-h-[300px] overflow-y-auto">
