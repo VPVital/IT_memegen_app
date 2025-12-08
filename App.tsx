@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ReactNode, ErrorInfo } from 'react';
+import React, { useState, useRef, useEffect, ReactNode, ErrorInfo, Component } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -270,11 +270,17 @@ function App() {
         if (signal.aborted) return;
         
         let finalImageUrl = imageResult.imageUrl;
-        // If failed, use placeholder with specific error message
-        if (!finalImageUrl) {
+        // If failed or returned raw error JSON, use placeholder
+        if (!finalImageUrl || finalImageUrl.includes('{"error"') || finalImageUrl.length < 50) {
             const errorReason = imageResult.error || "Render Failed";
-            // URL encode the error to show in placeholder
-            finalImageUrl = `https://placehold.co/800x800/1f2937/ffffff?text=${encodeURIComponent(errorReason.slice(0, 30))}&font=roboto`;
+            // Clean up error message if it's JSON
+            let cleanError = errorReason;
+            try {
+               const parsed = JSON.parse(errorReason);
+               if (parsed.error && parsed.error.message) cleanError = parsed.error.message;
+            } catch(e) {}
+            
+            finalImageUrl = `https://placehold.co/800x800/1f2937/ffffff?text=${encodeURIComponent(cleanError.slice(0, 30))}&font=roboto`;
         }
         
         const newMeme: MemeData = {
@@ -380,10 +386,20 @@ function App() {
 
           // Fallback image with error text
           let panelImageUrl = imageResult.imageUrl;
-          if (!panelImageUrl) {
+          
+          // Check for valid image URL (not empty, not error JSON)
+          if (!panelImageUrl || panelImageUrl.includes('{"error"') || panelImageUrl.length < 50) {
              const errorText = imageResult.error || `Panel ${i+1} Error`;
              console.warn(`Panel ${i+1} failed: ${errorText}`);
-             panelImageUrl = `https://placehold.co/600x600/ffffff/000000?text=${encodeURIComponent(errorText.slice(0, 20))}&font=roboto`;
+             
+             let cleanError = errorText;
+             try {
+                const parsed = JSON.parse(errorText);
+                if (parsed.error && parsed.error.message) cleanError = parsed.error.message;
+                else if (parsed.error && parsed.error.code) cleanError = `Error ${parsed.error.code}`;
+             } catch(e) {}
+
+             panelImageUrl = `https://placehold.co/600x600/ffffff/000000?text=${encodeURIComponent(cleanError.slice(0, 20))}&font=roboto`;
           }
 
           // Update local state safely

@@ -2,14 +2,15 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
 // Constants for Models
-const TEXT_MODEL = 'gemini-2.5-flash';
+// Use 2.0 Flash as the stable base for text
+const TEXT_MODEL = 'gemini-2.0-flash';
 
 // Prioritized list of models to try for images.
-// We rotate through different families to access different quota buckets.
+// Updated to prioritize stable models over experimental/preview ones that might 404.
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.5-flash-image',      // Bucket A: Fast, Standard
-  'gemini-3-pro-image-preview',  // Bucket B: High Quality (Separate Quota)
-  'imagen-3.0-generate-001',     // Bucket C: Imagen (Separate Quota)
+  'imagen-3.0-generate-001',     // Standard Imagen - Most reliable for images
+  'gemini-2.0-flash-exp',        // Experimental Flash
+  'gemini-2.5-flash-image',      // Preview (might 404 on some keys)
 ];
 
 export interface ImageGenerationResult {
@@ -33,8 +34,8 @@ const cleanJson = (text: string): string => {
 // Optimized for handling 429 Rate Limits in production
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 3, 
-  baseDelay: number = 2000,
+  retries: number = 2, 
+  baseDelay: number = 4000,
   factor: number = 2
 ): Promise<T> {
   try {
@@ -56,7 +57,6 @@ async function retryWithBackoff<T>(
     if (shouldRetry) {
       // If 429, we MUST wait at least 10-12 seconds.
       // 5 Requests Per Minute = 1 request every 12 seconds.
-      // If we don't wait this long, we just hit the wall again immediately.
       const minDelay = isQuotaError ? 12000 : baseDelay;
       
       // Jitter: Randomize to prevent thundering herd
@@ -110,7 +110,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }), 2, 4000); // Fewer retries for text, but safer delay
+    }), 2, 4000); 
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -210,16 +210,12 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
       try {
         console.log(`Attempting image gen with ${modelName}...`);
         
-        // Strategy: Try this model. If it hits 429, retryWithBackoff will wait ~12s and try ONCE more.
-        // If it fails again, we catch the error, wait a short safety buffer, and switch to the NEXT model.
-        // This prevents getting stuck on one model for 60s+ when the bucket is empty.
-        
         if (modelName.includes('imagen')) {
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
                 config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 1, 5000); // Only 1 retry (2 attempts total) to allow model switching
+            }), 1, 5000); 
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
             if (base64String) {
@@ -227,7 +223,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             }
 
         } else {
-            // Flash/Pro models
+            // Flash/Pro models (Multimodal endpoints)
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
@@ -250,6 +246,9 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
              lastError = "429 Quota Exceeded";
              console.warn(`Model ${modelName} 429 exhausted. Switching models in 2s...`);
              await new Promise(resolve => setTimeout(resolve, 2000));
+          } else if (status === 404 || msg.includes('404')) {
+             // Model not found or not enabled
+             console.warn(`Model ${modelName} not found (404). Switching...`);
           } else {
              console.warn(`Model ${modelName} failed with ${msg}. Switching...`);
           }
