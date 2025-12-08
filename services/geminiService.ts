@@ -5,11 +5,11 @@ import { ComicData, MemeData, GenerationType } from "../types";
 const TEXT_MODEL = 'gemini-2.5-flash';
 
 // Prioritized list of models to try for images.
-// If one returns 429 (Quota), we switch to the next.
+// We rotate through different families to access different quota buckets.
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.5-flash-image',      // Primary: Standard Preview (Fastest)
-  'imagen-3.0-generate-001',     // Secondary: High Quality (Separate Quota usually)
-  'gemini-3-pro-image-preview',  // Backup: Heavy duty (Slower, but powerful)
+  'gemini-2.5-flash-image',      // Bucket A: Fast, Standard
+  'gemini-3-pro-image-preview',  // Bucket B: High Quality (Separate Quota)
+  'imagen-3.0-generate-001',     // Bucket C: Imagen (Separate Quota)
 ];
 
 export interface ImageGenerationResult {
@@ -33,7 +33,7 @@ const cleanJson = (text: string): string => {
 // Optimized for handling 429 Rate Limits in production
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 4, 
+  retries: number = 3, 
   baseDelay: number = 2000,
   factor: number = 2
 ): Promise<T> {
@@ -54,20 +54,24 @@ async function retryWithBackoff<T>(
     const shouldRetry = isQuotaError || isServerError || isNetworkError;
 
     if (shouldRetry) {
-      // Calculate delay with Jitter to prevent thundering herd
-      // If it's a 429, we enforce a minimum wait of 5 seconds to let the bucket refill
-      const minDelay = isQuotaError ? 5000 : baseDelay;
+      // If 429, we MUST wait at least 10-12 seconds.
+      // 5 Requests Per Minute = 1 request every 12 seconds.
+      // If we don't wait this long, we just hit the wall again immediately.
+      const minDelay = isQuotaError ? 12000 : baseDelay;
       
-      // Jitter: Randomize between 0.75x and 1.25x of the calculated delay
-      const jitter = 0.75 + Math.random() * 0.5; 
+      // Jitter: Randomize to prevent thundering herd
+      const jitter = 0.8 + Math.random() * 0.4; 
       const waitTime = Math.max(minDelay, baseDelay) * jitter;
       
-      console.warn(`Retry (${retries} left) due to ${status || 'network error'}. Waiting ${Math.round(waitTime)}ms...`);
+      console.warn(`Retry (${retries} left) due to ${status || 'error'}. Waiting ${Math.round(waitTime/1000)}s...`);
       
       await new Promise(resolve => setTimeout(resolve, waitTime));
       
-      // Exponential backoff for the next attempt
-      return retryWithBackoff(fn, retries - 1, baseDelay * factor, factor);
+      // For quota errors, we don't necessarily want exponential backoff (just constant wait is fine),
+      // but for server errors, exponential is good.
+      const nextDelay = isQuotaError ? baseDelay : baseDelay * factor;
+      
+      return retryWithBackoff(fn, retries - 1, nextDelay, factor);
     }
     
     throw error;
@@ -106,7 +110,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }), 3, 2000); 
+    }), 2, 4000); // Fewer retries for text, but safer delay
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -166,7 +170,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
           },
         },
       },
-    }), 3, 2000);
+    }), 2, 4000);
 
     const rawText = response.text || '{}';
     let json;
@@ -204,15 +208,18 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
 
   for (const modelName of IMAGE_MODELS_PRIORITY) {
       try {
-        // We use higher retry count (4) and higher base delay (4000ms) for images
-        // because they are more prone to rate limits.
+        console.log(`Attempting image gen with ${modelName}...`);
+        
+        // Strategy: Try this model. If it hits 429, retryWithBackoff will wait ~12s and try ONCE more.
+        // If it fails again, we catch the error, wait a short safety buffer, and switch to the NEXT model.
+        // This prevents getting stuck on one model for 60s+ when the bucket is empty.
         
         if (modelName.includes('imagen')) {
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
                 config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 4, 4000);
+            }), 1, 5000); // Only 1 retry (2 attempts total) to allow model switching
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
             if (base64String) {
@@ -224,7 +231,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
-            }), 4, 4000);
+            }), 1, 5000);
 
             for (const part of response.candidates?.[0]?.content?.parts || []) {
                 if (part.inlineData) {
@@ -237,16 +244,14 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
           const status = error.status || error.code || error?.response?.status;
           const msg = error.message || String(error);
           
+          lastError = msg;
+          
           if (status === 429 || msg.includes('429')) {
              lastError = "429 Quota Exceeded";
-             // CRITICAL FIX: If we exhausted all internal retries and STILL got a 429,
-             // we must wait a significant time before trying the next model in the list.
-             // This gives the shared quota bucket time to refill.
-             console.warn(`Model ${modelName} exhausted quota. Cooling down for 8s...`);
-             await new Promise(resolve => setTimeout(resolve, 8000));
+             console.warn(`Model ${modelName} 429 exhausted. Switching models in 2s...`);
+             await new Promise(resolve => setTimeout(resolve, 2000));
           } else {
-             lastError = msg;
-             await new Promise(resolve => setTimeout(resolve, 1500));
+             console.warn(`Model ${modelName} failed with ${msg}. Switching...`);
           }
       }
   }

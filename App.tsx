@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ReactNode, ErrorInfo, Component } from 'react';
+import React, { useState, useRef, useEffect, ReactNode, ErrorInfo } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -17,7 +17,7 @@ interface ErrorBoundaryState {
 }
 
 // --- Error Boundary Component ---
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
@@ -247,7 +247,7 @@ function App() {
         // 1. Generate Text content
         if (signal.aborted) return;
         setStatusMessage('Generating witty captions...');
-        const textData = await withTimeout(generateMemeText(topic), 30000, {
+        const textData = await withTimeout(generateMemeText(topic), 40000, {
              type: GenerationType.SINGLE,
              visualPrompt: "Error generating prompt",
              topText: "Error",
@@ -260,10 +260,10 @@ function App() {
         if (signal.aborted) return;
         setStatusMessage('Rendering meme image...');
         
-        // Try multiple models aggressive fallback
+        // Increase timeout to 3 minutes to handle long rate-limit backoffs
         const imageResult = await withTimeout(
             generateImageFromPrompt(textData.visualPrompt + " high quality, funny meme image style"),
-            120000, // 2 minutes max for aggressive fallback
+            180000, 
             { error: "Timeout" }
         );
         
@@ -344,8 +344,9 @@ function App() {
           if (signal.aborted) break;
 
           // Artificial delay to prevent API Rate Limits (429)
+          // Increased to 12s to guarantee a refill for 5 RPM limit
           if (i > 0) {
-            let timeLeft = 10; // Slightly shorter cooldown as we are rotating models
+            let timeLeft = 12; 
             while (timeLeft > 0) {
                if (signal.aborted) break;
                setCoolDownSeconds(timeLeft);
@@ -365,9 +366,10 @@ function App() {
           let imageResult: ImageGenerationResult = { error: 'Unknown' };
           
           try {
+            // High timeout for each panel
             imageResult = await withTimeout(
                 generateImageFromPrompt(fullPrompt),
-                120000, 
+                180000, 
                 { error: "Timeout" }
             );
           } catch (err) {
@@ -441,7 +443,7 @@ function App() {
               {coolDownSeconds > 0 && (
                 <div 
                   className="absolute inset-0 bg-primary-900/20 z-0 transition-all duration-1000 ease-linear"
-                  style={{ width: `${(coolDownSeconds / 15) * 100}%` }}
+                  style={{ width: `${(coolDownSeconds / 12) * 100}%` }}
                 ></div>
               )}
               <div className={`w-1.5 h-1.5 rounded-full ${isGenerating ? (coolDownSeconds > 0 ? 'bg-blue-400' : 'bg-yellow-500 animate-ping') : 'bg-green-500'} relative z-10`}></div>
