@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, ReactNode, Component, ErrorInfo } from 'react';
+import React, { useState, useRef, useEffect, ReactNode, ErrorInfo, Component } from 'react';
 import { Image, Columns, Zap, Sparkles, Terminal, Code2, Coffee, Palette, Skull, Dices, FileText, Trash2, History, Hourglass, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
@@ -628,10 +628,10 @@ function App() {
           {/* RIGHT COLUMN: Results Preview */}
           <section 
             ref={resultsRef}
-            className="flex-1 bg-gray-900/30 overflow-y-auto p-4 lg:p-10 flex flex-col items-center relative scrollbar-thin min-h-[500px]"
+            className="flex-1 bg-gray-900/30 overflow-y-auto p-2 lg:p-4 flex flex-col items-center relative scrollbar-thin min-h-[500px]"
           >
             
-            <div className="w-full max-w-4xl mx-auto my-auto flex justify-center py-6 lg:py-10">
+            <div className="w-full max-w-4xl mx-auto flex justify-center py-2 lg:py-4">
               
               {/* Show Terminal Loader */}
               {isGenerating && activeTab === GenerationType.SINGLE && !currentMeme?.imageUrl && (
@@ -654,7 +654,7 @@ function App() {
 
               {/* Empty State */}
               {!currentMeme && !currentComic && !isGenerating && (
-                <div className="flex flex-col items-center justify-center text-gray-600 border-2 border-dashed border-gray-800 rounded-xl p-8 lg:p-12 bg-gray-950/50">
+                <div className="flex flex-col items-center justify-center text-gray-600 border-2 border-dashed border-gray-800 rounded-xl p-8 lg:p-12 bg-gray-950/50 mt-10">
                   <div className="w-16 h-16 lg:w-20 lg:h-20 bg-gray-900 rounded-full flex items-center justify-center mb-4 lg:mb-6 shadow-inner">
                     <Coffee size={32} className="text-gray-700 lg:w-10 lg:h-10" />
                   </div>

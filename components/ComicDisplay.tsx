@@ -128,7 +128,7 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
   if (comic.panels.length === 0) return null;
 
   return (
-    <div className="w-full flex flex-col gap-4 lg:gap-6 animate-fade-in pb-12">
+    <div className="w-full flex flex-col gap-4 animate-fade-in pb-4">
       
       <div className="flex items-center justify-end text-xs text-gray-500 font-mono mb-1 gap-1">
         <Pencil size={12} />
@@ -136,10 +136,10 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
       </div>
 
       {/* The Comic Strip "Paper" */}
-      <div ref={comicRef} className="bg-white p-2 lg:p-6 rounded-sm shadow-2xl border-2 border-gray-800">
+      <div ref={comicRef} className="bg-white p-2 lg:p-4 rounded-sm shadow-2xl border-2 border-gray-800">
         
         {/* Title within the strip */}
-        <h3 className="text-base md:text-xl font-bold text-center text-black mb-4 lg:mb-6 uppercase tracking-widest font-meme border-b-4 border-black pb-2 lg:pb-4">
+        <h3 className="text-base md:text-xl font-bold text-center text-black mb-3 uppercase tracking-widest font-meme border-b-4 border-black pb-2">
           {comic.topic}
         </h3>
         
@@ -168,8 +168,9 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
               </div>
               
               {/* Editable Caption Area */}
-              <div className="p-2 bg-white h-[80px] sm:h-[110px] flex items-center justify-center border-t-4 border-black relative group-hover:bg-gray-50 transition-colors">
+              <div className="p-2 bg-white h-[70px] sm:h-[90px] flex items-center justify-center border-t-4 border-black relative group-hover:bg-gray-50 transition-colors">
                 <textarea
+                  aria-label={`Текст панели ${idx + 1}`}
                   value={captions[idx] || ""}
                   onChange={(e) => handleCaptionChange(idx, e.target.value)}
                   maxLength={MAX_CAPTION_LENGTH}
@@ -193,6 +194,7 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
       <div className="flex flex-col sm:flex-row justify-center gap-3">
         <button 
           onClick={handleCopy}
+          aria-label="Скопировать изображение"
           className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold transition-all border border-gray-700 w-full sm:w-auto"
           title="Copy to Clipboard"
         >
@@ -201,6 +203,7 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
         </button>
         <button 
           onClick={handleDownload}
+          aria-label="Скачать изображение"
           disabled={isDownloading}
           className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-bold transition-all shadow-lg hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed text-sm w-full sm:w-auto"
         >

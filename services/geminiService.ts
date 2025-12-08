@@ -18,21 +18,16 @@ export interface ImageGenerationResult {
 }
 
 // Helper to strip markdown formatting and find JSON object
+// Optimized for Robustness (Preventing syntax errors)
 const cleanJson = (text: string): string => {
   if (!text) return '{}';
   
-  // 1. Try to find markdown code block
-  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (codeBlockMatch) {
-    return codeBlockMatch[1];
-  }
-
-  // 2. If no code block, try to find the first outer curly braces
-  const startIndex = text.indexOf('{');
-  const endIndex = text.lastIndexOf('}');
+  // 1. Regex to extract content strictly between the first { and the last }
+  // This handles cases where AI adds text before/after or markdown blocks
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
   
-  if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-    return text.substring(startIndex, endIndex + 1);
+  if (jsonMatch) {
+    return jsonMatch[0];
   }
   
   return text;
@@ -167,6 +162,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
     try {
         json = JSON.parse(cleanJson(rawText));
     } catch (e) {
+        console.warn("JSON Parse Error, defaulting to empty panels", e);
         json = { panels: [] };
     }
 
@@ -229,7 +225,9 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
       } catch (error: any) {
           const status = error.status || error.code;
           const msg = error.message || String(error);
-          console.warn(`Model ${modelName} failed:`, msg);
+          
+          // Debug logging for QA/RCA
+          // console.warn(`Model ${modelName} failed:`, msg);
           
           if (status === 429) {
              lastError = "429 Quota Exceeded";
@@ -244,6 +242,6 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
   }
 
   // If all models fail
-  console.error("All image models failed.");
+  console.error("All image models failed. Last error:", lastError);
   return { error: lastError };
 };
