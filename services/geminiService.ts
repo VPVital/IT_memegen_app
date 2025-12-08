@@ -6,11 +6,10 @@ const TEXT_MODEL = 'gemini-2.5-flash';
 
 // Prioritized list of models to try for images.
 // If one returns 429 (Quota), we switch to the next.
-// Added more fallback options.
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.5-flash-image',      // Primary: Standard Preview
-  'imagen-3.0-generate-001',     // Secondary: High Quality (often separate quota)
-  'gemini-3-pro-image-preview',  // Backup: Heavy duty
+  'gemini-2.5-flash-image',      // Primary: Standard Preview (Fastest)
+  'imagen-3.0-generate-001',     // Secondary: High Quality (Separate Quota usually)
+  'gemini-3-pro-image-preview',  // Backup: Heavy duty (Slower, but powerful)
 ];
 
 export interface ImageGenerationResult {
@@ -19,27 +18,24 @@ export interface ImageGenerationResult {
 }
 
 // Helper to strip markdown formatting and find JSON object
-// Optimized for Robustness (Preventing syntax errors)
 const cleanJson = (text: string): string => {
   if (!text) return '{}';
   
-  // 1. Regex to extract content strictly between the first { and the last }
-  // This handles cases where AI adds text before/after or markdown blocks
+  // Regex to extract content strictly between the first { and the last }
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  
   if (jsonMatch) {
     return jsonMatch[0];
   }
-  
   return text;
 };
 
-// Helper for retrying async operations with exponential backoff
-// MODIFIED: Now allows retrying on 429 (Too Many Requests) to handle RPM spikes.
+// Helper for retrying async operations with exponential backoff and Jitter
+// Optimized for handling 429 Rate Limits in production
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 3, 
-  delay: number = 2000
+  retries: number = 4, 
+  baseDelay: number = 2000,
+  factor: number = 2
 ): Promise<T> {
   try {
     return await fn();
@@ -47,27 +43,31 @@ async function retryWithBackoff<T>(
     // Stop if no retries left
     if (retries <= 0) throw error;
 
-    const status = error?.status || error?.code;
+    const status = error?.status || error?.code || error?.response?.status;
+    const msg = error?.message || '';
     
     // Determine if we should retry
-    // We explicitly retry on 429 now, as it's often a temporary rate limit (RPM)
-    const shouldRetry = 
-      status === 429 ||
-      status === 503 ||
-      status === 500 ||
-      error?.message?.includes('xhr') || 
-      error?.message?.includes('fetch') ||
-      error?.message?.includes('network') ||
-      (error?.error?.code === 500) ||
-      (error?.error?.code === 429);
+    const isQuotaError = status === 429 || msg.includes('429') || msg.includes('Quota') || msg.includes('Too Many Requests');
+    const isServerError = status >= 500 && status < 600;
+    const isNetworkError = msg.includes('xhr') || msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch');
+
+    const shouldRetry = isQuotaError || isServerError || isNetworkError;
 
     if (shouldRetry) {
-      // If it's a 429, wait longer to let the bucket refill
-      const waitTime = (status === 429) ? delay * 2 : delay;
-      // console.log(`Retrying API call (${retries} left) after ${waitTime}ms... Error: ${status}`);
+      // Calculate delay with Jitter to prevent thundering herd
+      // If it's a 429, we enforce a minimum wait of 5 seconds to let the bucket refill
+      const minDelay = isQuotaError ? 5000 : baseDelay;
+      
+      // Jitter: Randomize between 0.75x and 1.25x of the calculated delay
+      const jitter = 0.75 + Math.random() * 0.5; 
+      const waitTime = Math.max(minDelay, baseDelay) * jitter;
+      
+      console.warn(`Retry (${retries} left) due to ${status || 'network error'}. Waiting ${Math.round(waitTime)}ms...`);
       
       await new Promise(resolve => setTimeout(resolve, waitTime));
-      return retryWithBackoff(fn, retries - 1, waitTime * 1.5);
+      
+      // Exponential backoff for the next attempt
+      return retryWithBackoff(fn, retries - 1, baseDelay * factor, factor);
     }
     
     throw error;
@@ -106,7 +106,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }), 3, 2000); // More robust retries for text too
+    }), 3, 2000); 
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -204,15 +204,15 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
 
   for (const modelName of IMAGE_MODELS_PRIORITY) {
       try {
-        // console.log(`Trying image model: ${modelName}`);
+        // We use higher retry count (4) and higher base delay (4000ms) for images
+        // because they are more prone to rate limits.
         
-        // Imagen 3 uses generateImages, others use generateContent
         if (modelName.includes('imagen')) {
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
                 config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 3, 2000); // 3 retries, starting at 2s delay
+            }), 4, 4000);
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
             if (base64String) {
@@ -224,7 +224,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
-            }), 3, 2000); // 3 retries, starting at 2s delay
+            }), 4, 4000);
 
             for (const part of response.candidates?.[0]?.content?.parts || []) {
                 if (part.inlineData) {
@@ -234,27 +234,23 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
         }
 
       } catch (error: any) {
-          const status = error.status || error.code;
+          const status = error.status || error.code || error?.response?.status;
           const msg = error.message || String(error);
           
-          // Debug logging
-          // console.warn(`Model ${modelName} failed:`, msg);
-          
-          if (status === 429) {
+          if (status === 429 || msg.includes('429')) {
              lastError = "429 Quota Exceeded";
-             // If we exhausted retries within retryWithBackoff and STILL got 429,
-             // we need to wait a significant amount of time before trying the next model
-             // to allow the shared rate limiter to cool down.
-             await new Promise(resolve => setTimeout(resolve, 3000));
+             // CRITICAL FIX: If we exhausted all internal retries and STILL got a 429,
+             // we must wait a significant time before trying the next model in the list.
+             // This gives the shared quota bucket time to refill.
+             console.warn(`Model ${modelName} exhausted quota. Cooling down for 8s...`);
+             await new Promise(resolve => setTimeout(resolve, 8000));
           } else {
              lastError = msg;
-             // For other errors, sleep a bit before trying next model
-             await new Promise(resolve => setTimeout(resolve, 1000));
+             await new Promise(resolve => setTimeout(resolve, 1500));
           }
       }
   }
 
-  // If all models fail
   console.error("All image models failed. Last error:", lastError);
   return { error: lastError };
 };
