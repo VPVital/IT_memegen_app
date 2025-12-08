@@ -32,11 +32,11 @@ const cleanJson = (text: string): string => {
 };
 
 // Helper for retrying async operations with exponential backoff and Jitter
-// Optimized for handling 429 Rate Limits in production
+// Optimized for handling 429 Rate Limits using standard exponential growth
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 2, 
-  baseDelay: number = 4000,
+  retries: number = 3, 
+  delay: number = 2000,
   factor: number = 2
 ): Promise<T> {
   try {
@@ -56,23 +56,17 @@ async function retryWithBackoff<T>(
     const shouldRetry = isQuotaError || isServerError || isNetworkError;
 
     if (shouldRetry) {
-      // If 429, we MUST wait at least 10-12 seconds.
-      // 5 Requests Per Minute = 1 request every 12 seconds.
-      const minDelay = isQuotaError ? 12000 : baseDelay;
+      // Add Jitter: Randomize to prevent thundering herd (multiple clients retrying at exact same time)
+      const jitter = Math.random() * 1000; 
+      const waitTime = delay + jitter;
       
-      // Jitter: Randomize to prevent thundering herd
-      const jitter = 0.8 + Math.random() * 0.4; 
-      const waitTime = Math.max(minDelay, baseDelay) * jitter;
-      
-      console.warn(`Retry (${retries} left) due to ${status || 'error'}. Waiting ${Math.round(waitTime/1000)}s...`);
+      console.warn(`Retry (${retries} left) due to ${status || 'error'}. Waiting ${Math.round(waitTime)}ms...`);
       
       await new Promise(resolve => setTimeout(resolve, waitTime));
       
-      // For quota errors, we don't necessarily want exponential backoff (just constant wait is fine),
-      // but for server errors, exponential is good.
-      const nextDelay = isQuotaError ? baseDelay : baseDelay * factor;
-      
-      return retryWithBackoff(fn, retries - 1, nextDelay, factor);
+      // Exponential Backoff: Multiply delay by factor (default 2) for next attempt
+      // e.g. 2s -> 4s -> 8s
+      return retryWithBackoff(fn, retries - 1, delay * factor, factor);
     }
     
     throw error;
@@ -96,6 +90,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
   Keep visualPrompt in English.`;
 
   try {
+    // Retries: 3, Initial Delay: 2s (Exponential: 2s, 4s, 8s)
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
@@ -111,7 +106,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }), 2, 4000); 
+    }), 3, 2000); 
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -149,6 +144,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
   Ensure there is a narrative arc.`;
 
   try {
+    // Retries: 3, Initial Delay: 2s
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
@@ -171,7 +167,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
           },
         },
       },
-    }), 2, 4000);
+    }), 3, 2000);
 
     const rawText = response.text || '{}';
     let json;
@@ -212,11 +208,12 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
         console.log(`Attempting image gen with ${modelName}...`);
         
         if (modelName.includes('imagen')) {
+             // Retries: 3, Initial Delay: 4s (Slower start for images)
              const response = await retryWithBackoff<any>(() => ai.models.generateImages({
                 model: modelName,
                 prompt: fullPrompt,
                 config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 1, 5000); 
+            }), 3, 4000); 
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
             if (base64String) {
@@ -225,12 +222,11 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
 
         } else {
             // Flash/Pro models (Multimodal endpoints)
-            // Note: Some Flash models might just return text describing the image if not prompted correctly,
-            // but usually 'generateContent' with image-capable models works.
+            // Retries: 3, Initial Delay: 4s
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
-            }), 1, 5000);
+            }), 3, 4000);
 
             let foundImage = false;
             for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -253,7 +249,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
           
           if (status === 429 || msg.includes('429')) {
              lastError = "429 Quota Exceeded";
-             console.warn(`Model ${modelName} 429 exhausted. Switching models in 2s...`);
+             console.warn(`Model ${modelName} 429 exhausted after retries. Switching models in 2s...`);
              await new Promise(resolve => setTimeout(resolve, 2000));
           } else if (status === 404 || msg.includes('404')) {
              // Model not found or not enabled
