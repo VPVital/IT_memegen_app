@@ -5,7 +5,8 @@ import { ComicData, MemeData, GenerationType } from "../types";
 const TEXT_MODEL = 'gemini-2.5-flash';
 
 // Prioritized list of models to try for images.
-// If one returns 429 (Quota), we immediately switch to the next.
+// If one returns 429 (Quota), we switch to the next.
+// Added more fallback options.
 const IMAGE_MODELS_PRIORITY = [
   'gemini-2.5-flash-image',      // Primary: Standard Preview
   'imagen-3.0-generate-001',     // Secondary: High Quality (often separate quota)
@@ -34,29 +35,39 @@ const cleanJson = (text: string): string => {
 };
 
 // Helper for retrying async operations with exponential backoff
+// MODIFIED: Now allows retrying on 429 (Too Many Requests) to handle RPM spikes.
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
-  retries: number = 2, 
-  delay: number = 1000
+  retries: number = 3, 
+  delay: number = 2000
 ): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    // Don't retry if we have no retries left OR if it's a 429 (Quota Exceeded).
-    // For 429, we want to fail fast so the main loop can switch to a different model.
-    if (retries <= 0 || error?.status === 429 || error?.code === 429) throw error;
+    // Stop if no retries left
+    if (retries <= 0) throw error;
+
+    const status = error?.status || error?.code;
     
+    // Determine if we should retry
+    // We explicitly retry on 429 now, as it's often a temporary rate limit (RPM)
     const shouldRetry = 
-      (error?.status && error.status >= 500) || 
+      status === 429 ||
+      status === 503 ||
+      status === 500 ||
       error?.message?.includes('xhr') || 
       error?.message?.includes('fetch') ||
-      error?.message?.includes('500') ||
-      error?.message?.includes('503') ||
-      (error?.error?.code === 500);
+      error?.message?.includes('network') ||
+      (error?.error?.code === 500) ||
+      (error?.error?.code === 429);
 
     if (shouldRetry) {
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return retryWithBackoff(fn, retries - 1, delay * 1.5);
+      // If it's a 429, wait longer to let the bucket refill
+      const waitTime = (status === 429) ? delay * 2 : delay;
+      // console.log(`Retrying API call (${retries} left) after ${waitTime}ms... Error: ${status}`);
+      
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      return retryWithBackoff(fn, retries - 1, waitTime * 1.5);
     }
     
     throw error;
@@ -95,7 +106,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }));
+    }), 3, 2000); // More robust retries for text too
 
     const rawText = response.text || '{}';
     const textResponse = JSON.parse(cleanJson(rawText));
@@ -155,7 +166,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
           },
         },
       },
-    }));
+    }), 3, 2000);
 
     const rawText = response.text || '{}';
     let json;
@@ -201,7 +212,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
                 model: modelName,
                 prompt: fullPrompt,
                 config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 1, 1000);
+            }), 3, 2000); // 3 retries, starting at 2s delay
             
             const base64String = response.generatedImages?.[0]?.image?.imageBytes;
             if (base64String) {
@@ -213,7 +224,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: modelName,
                 contents: { parts: [{ text: fullPrompt }] },
-            }), 1, 1000);
+            }), 3, 2000); // 3 retries, starting at 2s delay
 
             for (const part of response.candidates?.[0]?.content?.parts || []) {
                 if (part.inlineData) {
@@ -226,13 +237,15 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
           const status = error.status || error.code;
           const msg = error.message || String(error);
           
-          // Debug logging for QA/RCA
+          // Debug logging
           // console.warn(`Model ${modelName} failed:`, msg);
           
           if (status === 429) {
              lastError = "429 Quota Exceeded";
-             // Don't sleep too long for 429, just switch model immediately
-             await new Promise(resolve => setTimeout(resolve, 500));
+             // If we exhausted retries within retryWithBackoff and STILL got 429,
+             // we need to wait a significant amount of time before trying the next model
+             // to allow the shared rate limiter to cool down.
+             await new Promise(resolve => setTimeout(resolve, 3000));
           } else {
              lastError = msg;
              // For other errors, sleep a bit before trying next model
