@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
 import { MemeData } from '../types';
 import { Download, Copy, Check } from 'lucide-react';
 // @ts-ignore
@@ -13,6 +13,10 @@ const MAX_BOTTOM_TEXT = 200;
 
 export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
   const memeRef = useRef<HTMLDivElement>(null);
+  // Refs for auto-resizing textareas
+  const topInputRef = useRef<HTMLTextAreaElement>(null);
+  const bottomInputRef = useRef<HTMLTextAreaElement>(null);
+
   const [isDownloading, setIsDownloading] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   
@@ -25,6 +29,22 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
     setTopText(meme.topText);
     setBottomText(meme.bottomText);
   }, [meme]);
+
+  // Helper to adjust height based on content
+  const adjustHeight = (element: HTMLTextAreaElement | null) => {
+    if (!element) return;
+    element.style.height = 'auto'; // Reset to calculate true scrollHeight
+    element.style.height = element.scrollHeight + 'px';
+  };
+
+  // Trigger resize immediately after text updates (generation or typing)
+  useLayoutEffect(() => {
+    adjustHeight(topInputRef.current);
+  }, [topText]);
+
+  useLayoutEffect(() => {
+    adjustHeight(bottomInputRef.current);
+  }, [bottomText]);
 
   // Helper function to handle html2canvas capture with text preservation
   const generateCanvas = async (element: HTMLElement) => {
@@ -109,7 +129,6 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
       
       <div className="bg-gray-950 border border-gray-800 rounded-lg p-2 shadow-2xl">
         {/* Wrapper for capture */}
-        {/* Removed overflow-hidden to allow text areas to be fully captured even if they overflow visually during edit (though resize-y helps prevent that) */}
         <div 
           ref={memeRef} 
           className="relative group rounded-sm bg-white"
@@ -118,19 +137,15 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
           {/* Top Text Area (The Setup) */}
           <div className="p-4 lg:p-4 pb-2 bg-white relative group/top">
              <textarea
+              ref={topInputRef}
               aria-label="Верхний текст мема"
               value={topText}
               onChange={(e) => setTopText(e.target.value)}
               maxLength={MAX_TOP_TEXT}
-              className="w-full bg-transparent text-left text-xl md:text-3xl font-sans font-extrabold text-black resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden"
-              // Auto-resize height logic
+              className="w-full bg-transparent text-left text-xl md:text-3xl font-sans font-extrabold text-black resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden whitespace-pre-wrap break-words"
+              // Auto-resize height logic is now handled by useLayoutEffect
               style={{ minHeight: '40px' }}
-              onInput={(e) => {
-                const target = e.target as HTMLTextAreaElement;
-                target.style.height = 'auto';
-                target.style.height = target.scrollHeight + 'px';
-              }}
-              rows={Math.max(2, topText.split('\n').length)}
+              rows={1}
               placeholder="Текст шутки..."
             />
             <div className={`absolute top-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/top:opacity-100 transition-opacity pointer-events-none ${topText.length > MAX_TOP_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
@@ -152,17 +167,13 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
            {bottomText && (
             <div className="px-4 lg:px-4 py-3 bg-white relative group/bottom">
                <textarea
+                ref={bottomInputRef}
                 aria-label="Нижний текст мема"
                 value={bottomText}
                 onChange={(e) => setBottomText(e.target.value)}
                 maxLength={MAX_BOTTOM_TEXT}
-                className="w-full bg-transparent text-left text-base md:text-xl font-sans text-gray-700 resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden"
-                onInput={(e) => {
-                    const target = e.target as HTMLTextAreaElement;
-                    target.style.height = 'auto';
-                    target.style.height = target.scrollHeight + 'px';
-                }}
-                rows={Math.max(1, bottomText.split('\n').length)}
+                className="w-full bg-transparent text-left text-base md:text-xl font-sans text-gray-700 resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden whitespace-pre-wrap break-words"
+                rows={1}
                 placeholder="Дополнительный текст..."
               />
                <div className={`absolute bottom-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/bottom:opacity-100 transition-opacity pointer-events-none ${bottomText.length > MAX_BOTTOM_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
@@ -183,7 +194,7 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
         <button 
           onClick={handleCopy}
           aria-label="Скопировать изображение"
-          className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold transition-all border border-gray-700 w-full sm:w-auto"
+          className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold transition-all border border-gray-700 w-full sm:w-auto whitespace-nowrap"
           title="Скопировать в буфер"
         >
           {isCopied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
@@ -193,7 +204,7 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
           onClick={handleDownload}
           aria-label="Скачать изображение"
           disabled={isDownloading}
-          className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-bold transition-all shadow-lg hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed group w-full sm:w-auto"
+          className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-bold transition-all shadow-lg hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed group w-full sm:w-auto whitespace-nowrap"
         >
            {isDownloading ? (
              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

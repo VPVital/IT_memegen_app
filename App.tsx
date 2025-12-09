@@ -708,18 +708,17 @@ function App() {
               {!currentMeme && !currentComic && !isGenerating && (
                 <div className="flex flex-col items-center justify-center text-gray-600 border-2 border-dashed border-gray-800 rounded-xl p-8 lg:p-12 bg-gray-950/50 mt-10">
                   <div className="w-16 h-16 lg:w-20 lg:h-20 bg-gray-900 rounded-full flex items-center justify-center mb-4 lg:mb-6 shadow-inner">
-                    <Coffee size={32} className="text-gray-700 lg:w-10 lg:h-10" />
+                    <Sparkles className="text-gray-700" size={32} />
                   </div>
-                  <h3 className="text-base lg:text-lg font-bold text-gray-500 mb-2">Область предпросмотра</h3>
-                  <p className="font-mono text-[10px] lg:text-xs text-gray-600 max-w-xs text-center">
-                    Результат генерации появится здесь. Заполните форму {window.innerWidth < 1024 ? 'выше' : 'слева'}, чтобы начать.
+                  <h3 className="text-lg lg:text-xl font-bold text-gray-500 mb-2">Генератор готов к работе</h3>
+                  <p className="text-sm text-gray-600 max-w-xs text-center">
+                    Опишите ситуацию или нажмите "sudo random" для генерации
                   </p>
                 </div>
               )}
+
             </div>
-
           </section>
-
         </main>
       </div>
     </ErrorBoundary>
