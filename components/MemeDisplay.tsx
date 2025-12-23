@@ -1,6 +1,7 @@
+
 import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
 import { MemeData } from '../types';
-import { Download, Copy, Check } from 'lucide-react';
+import { Download, Copy, Check, AlertCircle } from 'lucide-react';
 // @ts-ignore
 import html2canvas from 'html2canvas';
 
@@ -8,210 +9,137 @@ interface MemeDisplayProps {
   meme: MemeData;
 }
 
-const MAX_TOP_TEXT = 100;
-const MAX_BOTTOM_TEXT = 200;
-
 export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
   const memeRef = useRef<HTMLDivElement>(null);
-  // Refs for auto-resizing textareas
   const topInputRef = useRef<HTMLTextAreaElement>(null);
   const bottomInputRef = useRef<HTMLTextAreaElement>(null);
 
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
-  
-  // Local state for editing text
   const [topText, setTopText] = useState(meme.topText);
   const [bottomText, setBottomText] = useState(meme.bottomText);
 
-  // Sync state if prop changes (new generation)
   useEffect(() => {
     setTopText(meme.topText);
     setBottomText(meme.bottomText);
   }, [meme]);
 
-  // Helper to adjust height based on content
   const adjustHeight = (element: HTMLTextAreaElement | null) => {
     if (!element) return;
-    element.style.height = 'auto'; // Reset to calculate true scrollHeight
-    element.style.height = element.scrollHeight + 'px';
+    element.style.height = '0px'; 
+    const scrollHeight = element.scrollHeight;
+    element.style.height = `${scrollHeight}px`;
   };
 
-  // Trigger resize immediately after text updates (generation or typing)
   useLayoutEffect(() => {
-    adjustHeight(topInputRef.current);
-  }, [topText]);
+    const timer = setTimeout(() => {
+      adjustHeight(topInputRef.current);
+      adjustHeight(bottomInputRef.current);
+    }, 10);
+    return () => clearTimeout(timer);
+  }, [topText, bottomText]);
 
-  useLayoutEffect(() => {
-    adjustHeight(bottomInputRef.current);
-  }, [bottomText]);
-
-  // Helper function to handle html2canvas capture with text preservation
-  const generateCanvas = async (element: HTMLElement) => {
-    return await html2canvas(element, {
+  const capture = async () => {
+    if (!memeRef.current) return null;
+    return await html2canvas(memeRef.current, {
       scale: 2,
       useCORS: true,
-      backgroundColor: '#ffffff', // Force white background for modern look
-      logging: false,
-      onclone: (clonedDoc) => {
-        // Critical Fix: Replace textareas with divs in the cloned document.
-        // Textareas often have scrollbars or fixed heights that html2canvas clips.
-        // Divs will expand naturally to fit all text.
-        const textAreas = clonedDoc.querySelectorAll('textarea');
-        textAreas.forEach((textArea) => {
-            const div = clonedDoc.createElement('div');
-            div.innerText = textArea.value;
-            
-            // Copy computed styles to match appearance
-            const computed = window.getComputedStyle(textArea);
-            div.style.font = computed.font;
-            div.style.fontFamily = computed.fontFamily;
-            div.style.fontSize = computed.fontSize;
-            div.style.fontWeight = computed.fontWeight;
-            div.style.lineHeight = computed.lineHeight;
-            div.style.textAlign = computed.textAlign;
-            div.style.color = computed.color;
-            div.style.padding = computed.padding;
-            div.style.whiteSpace = 'pre-wrap'; // Preserve line breaks
-            div.style.wordBreak = 'break-word';
-            div.style.width = '100%';
-            div.style.height = 'auto'; // Allow height to grow to fit text
-            div.style.minHeight = computed.height; // Keep minimum height
-            div.style.background = 'transparent';
-            div.style.border = 'none';
-            div.style.outline = 'none';
-            div.style.overflow = 'visible';
-            
-            if (textArea.parentNode) {
-                textArea.parentNode.replaceChild(div, textArea);
-            }
+      backgroundColor: '#ffffff',
+      onclone: (doc) => {
+        // Convert textareas to divs for high-quality export
+        doc.querySelectorAll('textarea').forEach((ta) => {
+          const div = doc.createElement('div');
+          div.innerText = ta.value;
+          const style = window.getComputedStyle(ta);
+          div.style.font = style.font;
+          div.style.fontSize = style.fontSize;
+          div.style.fontWeight = style.fontWeight;
+          div.style.color = style.color;
+          div.style.padding = style.padding;
+          div.style.whiteSpace = 'pre-wrap';
+          div.style.wordBreak = 'break-word';
+          ta.parentNode?.replaceChild(div, ta);
         });
       }
     });
   };
 
   const handleDownload = async () => {
-    if (!memeRef.current) return;
-    setIsDownloading(true);
-    try {
-      const canvas = await generateCanvas(memeRef.current);
-      const image = canvas.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.href = image;
-      link.download = `it-meme-${Date.now()}.png`;
+    setIsProcessing(true);
+    const canvas = await capture();
+    if (canvas) {
+      const link = document.createElement('a');
+      link.download = `meme-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
       link.click();
-    } catch (error) {
-      console.error("Download failed:", error);
-    } finally {
-      setIsDownloading(false);
     }
+    setIsProcessing(false);
   };
 
   const handleCopy = async () => {
-    if (!memeRef.current) return;
-    try {
-      const canvas = await generateCanvas(memeRef.current);
+    const canvas = await capture();
+    if (canvas) {
       canvas.toBlob(async (blob) => {
         if (!blob) return;
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2000);
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          setIsCopied(true);
+          setTimeout(() => setIsCopied(false), 2000);
+        } catch (e) {
+          // Fallback if Clipboard API restricted
+          const url = canvas.toDataURL();
+          window.open(url, '_blank');
+        }
       });
-    } catch (error) {
-      console.error("Copy failed", error);
     }
   };
 
-  if (!meme.imageUrl) return null;
-
   return (
-    <div className="flex flex-col gap-2 w-full max-w-xl animate-fade-in pb-4">
-      
-      <div className="bg-gray-950 border border-gray-800 rounded-lg p-2 shadow-2xl">
-        {/* Wrapper for capture */}
-        <div 
-          ref={memeRef} 
-          className="relative group rounded-sm bg-white"
-        >
-          
-          {/* Top Text Area (The Setup) */}
-          <div className="p-4 lg:p-4 pb-2 bg-white relative group/top">
-             <textarea
+    <div className="flex flex-col gap-4 w-full max-w-xl animate-fade-in pb-12">
+      <div className="bg-gray-950 border border-gray-800 rounded-2xl p-2 shadow-2xl overflow-hidden ring-1 ring-white/5">
+        <div ref={memeRef} className="bg-white rounded-xl overflow-hidden shadow-sm">
+          <div className="p-5">
+            <textarea
               ref={topInputRef}
-              aria-label="Верхний текст мема"
               value={topText}
               onChange={(e) => setTopText(e.target.value)}
-              maxLength={MAX_TOP_TEXT}
-              className="w-full bg-transparent text-left text-xl md:text-3xl font-sans font-extrabold text-black resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden whitespace-pre-wrap break-words"
-              // Auto-resize height logic is now handled by useLayoutEffect
-              style={{ minHeight: '40px' }}
+              className="w-full bg-transparent text-left text-2xl md:text-3xl font-sans font-black text-black resize-none focus:outline-none leading-tight border-none overflow-hidden"
               rows={1}
-              placeholder="Текст шутки..."
-            />
-            <div className={`absolute top-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/top:opacity-100 transition-opacity pointer-events-none ${topText.length > MAX_TOP_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
-                {topText.length}/{MAX_TOP_TEXT}
-            </div>
-          </div>
-
-          {/* The Image Container */}
-          <div className="relative w-full flex justify-center bg-gray-100">
-            <img 
-              src={meme.imageUrl} 
-              alt={meme.visualPrompt} 
-              className="w-auto max-w-full h-auto max-h-[65vh] object-contain mx-auto"
-              crossOrigin="anonymous" 
             />
           </div>
           
-          {/* Bottom Text Area (The Punchline/Context) */}
-           {bottomText && (
-            <div className="px-4 lg:px-4 py-3 bg-white relative group/bottom">
-               <textarea
-                ref={bottomInputRef}
-                aria-label="Нижний текст мема"
-                value={bottomText}
-                onChange={(e) => setBottomText(e.target.value)}
-                maxLength={MAX_BOTTOM_TEXT}
-                className="w-full bg-transparent text-left text-base md:text-xl font-sans text-gray-700 resize-y focus:outline-none focus:bg-gray-50 rounded leading-tight border-none overflow-hidden whitespace-pre-wrap break-words"
-                rows={1}
-                placeholder="Дополнительный текст..."
-              />
-               <div className={`absolute bottom-1 right-2 text-[8px] font-mono text-gray-300 opacity-0 group-hover/bottom:opacity-100 transition-opacity pointer-events-none ${bottomText.length > MAX_BOTTOM_TEXT * 0.9 ? 'text-red-400 opacity-100' : ''}`}>
-                 {bottomText.length}/{MAX_BOTTOM_TEXT}
-              </div>
-            </div>
-          )}
+          <div className="bg-gray-100 flex justify-center border-y border-gray-100 min-h-[300px] items-center">
+            {meme.imageUrl ? (
+              <img src={meme.imageUrl} alt="AI visual" className="w-full h-auto object-contain max-h-[500px]" crossOrigin="anonymous" />
+            ) : (
+              <AlertCircle className="text-gray-300" size={48} />
+            )}
+          </div>
 
-          {/* Watermark for branding */}
-           <div className="px-4 pb-2 bg-white text-right">
-              <span className="text-[9px] text-gray-400 font-mono">generated by IT_MemeGen</span>
-           </div>
-
+          <div className="p-5">
+            <textarea
+              ref={bottomInputRef}
+              value={bottomText}
+              onChange={(e) => setBottomText(e.target.value)}
+              className="w-full bg-transparent text-left text-lg md:text-xl font-sans font-bold text-gray-700 resize-none focus:outline-none leading-snug border-none overflow-hidden"
+              rows={1}
+            />
+          </div>
+          
+          <div className="px-5 pb-3 text-right bg-white">
+            <span className="text-[10px] text-gray-400 font-mono tracking-widest uppercase opacity-60">IT_MEME_LAB_DEBUG_MODE</span>
+          </div>
         </div>
       </div>
-      
-      <div className="flex flex-col sm:flex-row justify-center gap-3">
-        <button 
-          onClick={handleCopy}
-          aria-label="Скопировать изображение"
-          className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold transition-all border border-gray-700 w-full sm:w-auto whitespace-nowrap"
-          title="Скопировать в буфер"
-        >
+
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={handleCopy} className="flex items-center justify-center gap-2 py-3.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold transition-all border border-gray-700">
           {isCopied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
-          <span className="sm:hidden">Скопировать</span>
+          <span>Копировать</span>
         </button>
-        <button 
-          onClick={handleDownload}
-          aria-label="Скачать изображение"
-          disabled={isDownloading}
-          className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-bold transition-all shadow-lg hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed group w-full sm:w-auto whitespace-nowrap"
-        >
-           {isDownloading ? (
-             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-          ) : (
-             <Download size={18} className="group-hover:scale-110 transition-transform" />
-          )}
-          <span>{isDownloading ? 'Рендеринг...' : 'Скачать Мем'}</span>
+        <button onClick={handleDownload} disabled={isProcessing} className="flex items-center justify-center gap-2 py-3.5 bg-primary-600 hover:bg-primary-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-primary-500/20 disabled:opacity-50">
+          {isProcessing ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Download size={18} />}
+          <span>Скачать PNG</span>
         </button>
       </div>
     </div>

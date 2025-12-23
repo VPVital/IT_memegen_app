@@ -1,15 +1,12 @@
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
-// Constants for Models
-// Use 2.5 Flash as the stable base for text
-const TEXT_MODEL = 'gemini-2.5-flash';
-
-// Prioritized list of models to try for images.
-// 'gemini-2.0-flash' is removed because it is primarily a text model and does not consistently generate inline images.
+// Latest high-performance models
+const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODELS_PRIORITY = [
-  'gemini-2.5-flash-image',      // Specialized Image Model (Nano Banana) - Primary
-  'imagen-4.0-generate-001',     // Fallback Standard Imagen
+  'gemini-2.5-flash-image',
+  'imagen-4.0-generate-001',
 ];
 
 export interface ImageGenerationResult {
@@ -17,78 +14,45 @@ export interface ImageGenerationResult {
     error?: string;
 }
 
-// Helper to strip markdown formatting and find JSON object
 const cleanJson = (text: string): string => {
   if (!text) return '{}';
-  
-  // Regex to extract content strictly between the first { and the last }
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return jsonMatch[0];
-  }
-  return text;
+  return jsonMatch ? jsonMatch[0] : text;
 };
 
-// Helper for retrying async operations with exponential backoff and Jitter
-// Optimized for handling 429 Rate Limits using standard exponential growth
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
   retries: number = 3, 
-  delay: number = 2000,
+  delay: number = 1500,
   factor: number = 2
 ): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    // Stop if no retries left
     if (retries <= 0) throw error;
-
     const status = error?.status || error?.code || error?.response?.status;
-    const msg = error?.message || '';
-    
-    // Determine if we should retry
-    const isQuotaError = status === 429 || msg.includes('429') || msg.includes('Quota') || msg.includes('Too Many Requests');
-    const isServerError = status >= 500 && status < 600;
-    const isNetworkError = msg.includes('xhr') || msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch');
-
-    const shouldRetry = isQuotaError || isServerError || isNetworkError;
-
-    if (shouldRetry) {
-      // Add Jitter: Randomize to prevent thundering herd (multiple clients retrying at exact same time)
-      const jitter = Math.random() * 1000; 
-      const waitTime = delay + jitter;
-      
-      console.warn(`Retry (${retries} left) due to ${status || 'error'}. Waiting ${Math.round(waitTime)}ms...`);
-      
+    if (status === 429 || (status >= 500 && status < 600)) {
+      const waitTime = delay + Math.random() * 500;
+      console.warn(`[QA-Retry] Attempt failed (${status}). Retrying in ${Math.round(waitTime)}ms...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
-      
-      // Exponential Backoff: Multiply delay by factor (default 2) for next attempt
-      // e.g. 2s -> 4s -> 8s
       return retryWithBackoff(fn, retries - 1, delay * factor, factor);
     }
-    
     throw error;
   }
 }
 
-/**
- * Generates the text content (prompts and captions) for a single meme.
- */
 export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'id' | 'isLoading' | 'timestamp'>> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-  const prompt = `Generate a witty, sarcastic IT/Programmer meme idea about: "${topic}".
-  The humor should be relatable to software engineers (bugs, managers, deadlines, legacy code, git).
-  
-  Return a JSON object with:
-  1. visualPrompt: A detailed visual description for an image generator. Keep it simple and iconic.
-  2. topText: The setup text (Russian language). Short and punchy.
-  3. bottomText: The punchline (Russian language). Short and punchy.
-  
-  Keep visualPrompt in English.`;
+  const prompt = `System: You are an elite Senior Developer with a dark sense of humor. 
+  Topic: "${topic}".
+  Task: Create a viral IT meme.
+  Requirements: 
+  - topText: Setup in Russian (max 50 chars).
+  - bottomText: Punchline in Russian (max 80 chars).
+  - visualPrompt: Detailed scene description in English for AI generator.
+  Format: JSON only.`;
 
   try {
-    // Retries: 3, Initial Delay: 2s (Exponential: 2s, 4s, 8s)
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
@@ -104,49 +68,37 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
           required: ["visualPrompt", "topText", "bottomText"],
         },
       },
-    }), 3, 2000); 
+    })); 
 
-    const rawText = response.text || '{}';
-    const textResponse = JSON.parse(cleanJson(rawText));
-
+    const data = JSON.parse(cleanJson(response.text));
     return {
       type: GenerationType.SINGLE,
-      visualPrompt: textResponse.visualPrompt || "A funny programmer computer screen",
-      topText: textResponse.topText || "",
-      bottomText: textResponse.bottomText || "",
+      visualPrompt: data.visualPrompt,
+      topText: data.topText,
+      bottomText: data.bottomText,
     };
   } catch (error) {
-    console.error("Meme text generation failed:", error);
+    console.error("[QA-Error] Meme Text Failure:", error);
     return {
       type: GenerationType.SINGLE,
-      visualPrompt: "Blue screen of death with confused programmer",
-      topText: "Когда код упал",
-      bottomText: "А ты не знаешь почему",
+      visualPrompt: "Developer crying at a desk",
+      topText: "Когда пришел дебажить приложение",
+      bottomText: "А оно просто не запускается",
     };
   }
 };
 
-/**
- * Generates the script for a 3-4 panel comic strip.
- */
 export const generateComicScript = async (topic: string, panelCount: number): Promise<Omit<ComicData, 'id' | 'isLoading' | 'styleLabel' | 'timestamp'>> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-  const prompt = `Create a funny ${panelCount}-panel comic strip script about: "${topic}" for IT professionals.
-  
-  Return a JSON object with an array of panels.
-  Each panel must have:
-  1. description: Visual description for image generator (in English). Keep generic regarding style.
-  2. caption: The dialogue/text for that panel (in Russian).
-  
-  Ensure there is a narrative arc.`;
+  const prompt = `Create a ${panelCount}-panel tech comic strip about: "${topic}".
+  Focus on programming/IT humor. Captions must be in Russian.
+  Return exactly ${panelCount} panels.`;
 
   try {
-    // Retries: 3, Initial Delay: 2s
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
-      config: {
+      config: { 
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -157,110 +109,61 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
                 type: Type.OBJECT,
                 properties: {
                   panelNumber: { type: Type.INTEGER },
-                  description: { type: Type.STRING },
-                  caption: { type: Type.STRING },
+                  description: { type: Type.STRING, description: "Detailed visual description for image AI in English" },
+                  caption: { type: Type.STRING, description: "Funny punchline in Russian" },
                 },
-              },
-            },
+                required: ["panelNumber", "description", "caption"]
+              }
+            }
           },
-        },
+          required: ["panels"]
+        }
       },
-    }), 3, 2000);
+    }));
 
-    const rawText = response.text || '{}';
-    let json;
-    try {
-        json = JSON.parse(cleanJson(rawText));
-    } catch (e) {
-        console.warn("JSON Parse Error, defaulting to empty panels", e);
-        json = { panels: [] };
-    }
+    const json = JSON.parse(cleanJson(response.text));
+    const validPanels = (json.panels || []).slice(0, panelCount);
+    
+    if (validPanels.length === 0) throw new Error("No panels generated");
 
-    const panels = Array.isArray(json.panels) ? json.panels : [];
-
-    return {
-      type: GenerationType.COMIC,
-      topic,
-      panels: panels,
+    return { 
+      type: GenerationType.COMIC, 
+      topic, 
+      panels: validPanels 
     };
   } catch (error) {
-    console.error("Comic script generation failed:", error);
-    return {
-      type: GenerationType.COMIC,
-      topic,
-      panels: [], 
+    console.error("[QA-Error] Comic Script Failure, using fallback:", error);
+    return { 
+      type: GenerationType.COMIC, 
+      topic, 
+      panels: [
+        { panelNumber: 1, description: "Frustrated programmer looking at a glowing monitor", caption: "Когда видишь баг..." },
+        { panelNumber: 2, description: "Programmer holding head in hands, server room background", caption: "И понимаешь, что это твой код..." },
+        { panelNumber: 3, description: "Programmer drinking a lot of coffee, late at night", caption: "Просто еще один день в IT." },
+      ] 
     };
   }
 };
 
-/**
- * Generates an image by aggressively trying multiple models.
- * Returns an object with either the imageUrl or a specific error message.
- */
 export const generateImageFromPrompt = async (fullPrompt: string): Promise<ImageGenerationResult> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  let lastError = "Unknown Error";
-
-  for (const modelName of IMAGE_MODELS_PRIORITY) {
-      try {
-        console.log(`Attempting image gen with ${modelName}...`);
-        
-        if (modelName.includes('imagen')) {
-             // Imagen Models (generateImages)
-             // Retries: 3, Initial Delay: 4s
-             const response = await retryWithBackoff<any>(() => ai.models.generateImages({
-                model: modelName,
-                prompt: fullPrompt,
-                config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }, 
-            }), 3, 4000); 
-            
-            const base64String = response.generatedImages?.[0]?.image?.imageBytes;
-            if (base64String) {
-                return { imageUrl: `data:image/jpeg;base64,${base64String}` };
-            }
-
-        } else {
-            // Flash/Banana Models (generateContent)
-            // Retries: 3, Initial Delay: 4s
-            const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-                model: modelName,
-                contents: { parts: [{ text: fullPrompt }] },
-            }), 3, 4000);
-
-            let foundImage = false;
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) {
-                    return { imageUrl: `data:image/png;base64,${part.inlineData.data}` };
-                }
-            }
-            
-            if (!foundImage && response.text) {
-               console.warn(`Model ${modelName} returned text instead of image.`);
-               throw new Error(`Model returned text, not image`);
-            }
-        }
-
-      } catch (error: any) {
-          const status = error.status || error.code || error?.response?.status;
-          const msg = error.message || String(error);
-          
-          lastError = msg;
-          
-          if (status === 429 || msg.includes('429')) {
-             lastError = "429 Quota Exceeded";
-             console.warn(`Model ${modelName} 429 exhausted. Switching models in 2s...`);
-             await new Promise(resolve => setTimeout(resolve, 2000));
-          } else if (status === 404 || msg.includes('404')) {
-             console.warn(`Model ${modelName} not found (404). Switching...`);
-          } else if (status === 403 || msg.includes('403')) {
-             lastError = "403 Permission Denied (Check API Key)";
-             console.warn(`Model ${modelName} 403 Permission Denied.`);
-          } else {
-             console.warn(`Model ${modelName} failed with ${msg}. Switching...`);
-          }
+  for (const model of IMAGE_MODELS_PRIORITY) {
+    try {
+      if (model.includes('imagen')) {
+        const res = await ai.models.generateImages({ model, prompt: fullPrompt });
+        const b64 = res.generatedImages?.[0]?.image?.imageBytes;
+        if (b64) return { imageUrl: `data:image/png;base64,${b64}` };
+      } else {
+        const res = await ai.models.generateContent({
+          model,
+          contents: { parts: [{ text: fullPrompt }] },
+        });
+        const part = res.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+        if (part?.inlineData) return { imageUrl: `data:image/png;base64,${part.inlineData.data}` };
       }
+    } catch (e) {
+      console.warn(`[QA-Image] Model ${model} failed, switching...`);
+    }
   }
-
-  console.error("All image models failed. Last error:", lastError);
-  return { error: lastError };
+  return { error: "IMAGE_GENERATION_FAILED" };
 };
