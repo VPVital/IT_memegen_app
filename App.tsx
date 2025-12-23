@@ -1,6 +1,6 @@
 
 import React, { Component, useState, useRef, useEffect, ReactNode, ErrorInfo } from 'react';
-import { Image, Columns, Zap, Sparkles, Terminal, Trash2, History, Skull, Dices, Bug } from 'lucide-react';
+import { Image, Columns, Zap, Sparkles, Terminal, Trash2, History, Skull, Dices, Bug, AlertTriangle } from 'lucide-react';
 import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
 import { ComicDisplay } from './components/ComicDisplay';
@@ -89,6 +89,11 @@ function App() {
         setStatus('RENDERING_PIXELS...');
         const image = await generateImageFromPrompt(textData.visualPrompt + " viral meme style, high quality digital art");
         
+        if (image.isQuotaError) {
+          setStatus('API_QUOTA_EXCEEDED');
+          throw new Error("Превышен лимит запросов API. Подождите 60 секунд.");
+        }
+
         const res: MemeData = {
           id: Date.now().toString(),
           type: GenerationType.SINGLE,
@@ -104,8 +109,6 @@ function App() {
         const style = COMIC_STYLES.find(s => s.id === selectedStyleId) || COMIC_STYLES[0];
         const script = await generateComicScript(topic, 3);
         
-        if (!script || !script.panels) throw new Error("INVALID_SCRIPT_DATA");
-
         const initialPanels: ComicPanel[] = script.panels.map(p => ({ ...p, imageUrl: undefined }));
         const comicId = Date.now().toString();
         
@@ -129,9 +132,15 @@ function App() {
           const isLast = i === accumulatedPanels.length - 1;
           
           const img = await generateImageFromPrompt(`${accumulatedPanels[i].description}. ${style.promptSuffix}`);
-          const newImageUrl = img.imageUrl || `https://placehold.co/600x600?text=Panel_${i+1}_Failed`;
           
-          // Atomic update of the panel to avoid partial render issues
+          if (img.isQuotaError) {
+             setStatus('QUOTA_LIMIT_REACHED');
+             // Mark loading finished even if failed to show user the error
+             setCurrentComic(prev => prev ? {...prev, isLoading: false} : null);
+             throw new Error("API Limit reached (429). Please wait 1 minute before next comic.");
+          }
+
+          const newImageUrl = img.imageUrl || `https://placehold.co/600x600?text=Panel_${i+1}_Failed`;
           accumulatedPanels[i] = { ...accumulatedPanels[i], imageUrl: newImageUrl };
           
           const updatedComic: ComicData = {
@@ -143,11 +152,10 @@ function App() {
           setCurrentComic(updatedComic);
 
           if (isLast) {
-            // Final settle update
             saveToHistory(updatedComic);
           } else {
-            // Cooldown between panels to prevent rate limits and allow UI to breathe
-            for (let s = 2; s > 0; s--) { 
+            // Increased cooldown for comic panels to avoid 429
+            for (let s = 5; s > 0; s--) { 
               setCoolDown(s); 
               await new Promise(r => setTimeout(r, 1000)); 
             }
@@ -155,14 +163,14 @@ function App() {
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("[QA-Global-Error]", err);
-      setStatus('PROCESS_HALTED');
+      setStatus(err.message.includes('429') || err.message.includes('лимит') ? 'LIMIT_EXCEEDED' : 'ERROR_OCCURRED');
+      alert(err.message);
     } finally {
-      // Delay disabling generation state to allow DOM transitions to finish
       setTimeout(() => {
         setIsGenerating(false);
-        setStatus('SYSTEM_READY');
+        if (status === 'INITIALIZING') setStatus('SYSTEM_READY');
         setCoolDown(0);
       }, 500);
     }
@@ -183,7 +191,7 @@ function App() {
           <div className="flex items-center gap-3 px-4 py-1.5 rounded-full border border-gray-800 bg-gray-900 font-mono text-[10px]">
             <span className={`w-2 h-2 rounded-full ${isGenerating ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></span>
             <span className="text-gray-400">{status}</span>
-            {coolDown > 0 && <span className="text-primary-400 ml-1">PAUSE: {coolDown}S</span>}
+            {coolDown > 0 && <span className="text-primary-400 ml-1">COOLDOWN: {coolDown}S</span>}
           </div>
         </header>
 
@@ -218,8 +226,14 @@ function App() {
                 </div>
                 <button type="submit" disabled={isGenerating} className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all ${isGenerating ? 'bg-red-600/50 cursor-not-allowed opacity-70' : 'bg-primary-600 hover:bg-primary-500 shadow-lg shadow-primary-500/20'}`}>
                   {isGenerating ? <Skull size={20} className="animate-pulse" /> : <Zap size={20} />}
-                  <span className="uppercase tracking-widest font-mono">{isGenerating ? 'Rendering...' : 'Execute_Build'}</span>
+                  <span className="uppercase tracking-widest font-mono">{isGenerating ? 'Processing...' : 'Execute_Build'}</span>
                 </button>
+                {status === 'LIMIT_EXCEEDED' && (
+                  <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] text-red-400 font-mono uppercase">
+                    <AlertTriangle size={14} className="shrink-0" />
+                    <span>Лимит бесплатных запросов исчерпан. Подождите минуту перед следующей генерацией.</span>
+                  </div>
+                )}
               </form>
             </div>
 
@@ -248,7 +262,7 @@ function App() {
             {!currentMeme && !currentComic && !isGenerating && (
               <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-20">
                 <Sparkles size={64} />
-                <p className="font-mono text-sm tracking-widest uppercase">Null pointer exception: Input needed</p>
+                <p className="font-mono text-sm tracking-widest uppercase">Input buffer empty: waiting for data...</p>
               </div>
             )}
           </section>
