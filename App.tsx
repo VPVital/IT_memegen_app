@@ -8,21 +8,40 @@ import { TerminalLoader } from './components/TerminalLoader';
 import { generateMemeText, generateImageFromPrompt, generateComicScript } from './services/geminiService';
 import { GenerationType, MemeData, ComicData, COMIC_STYLES, ComicPanel } from './types';
 
-interface ErrorBoundaryProps { children: ReactNode; }
+interface ErrorBoundaryProps { children?: ReactNode; }
 interface ErrorBoundaryState { hasError: boolean; error: Error | null; }
 
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false, error: null };
+// Use React.Component and explicit state property declaration to resolve "Property does not exist" errors in strict TS environments.
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  override state: ErrorBoundaryState = { hasError: false, error: null };
+
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+  }
+
   static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("[QA-Crash]", error, info); }
+  
+  componentDidCatch(error: Error, info: ErrorInfo) { 
+    console.error("[QA-Critical-Crash]", error, info); 
+  }
+  
   render() {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-6 text-center">
           <Bug size={64} className="text-red-500 mb-6 animate-bounce" />
-          <h1 className="text-3xl font-black text-white mb-2">CRITICAL_EXCEPTION</h1>
-          <p className="text-red-400 font-mono mb-8 max-w-md">{this.state.error?.message}</p>
-          <button onClick={() => window.location.reload()} className="px-8 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold transition-all">REBOOT SYSTEM</button>
+          <h1 className="text-3xl font-black text-white mb-2 tracking-tighter uppercase font-mono">Kernel_Panic</h1>
+          <p className="text-red-400 font-mono mb-8 max-w-md opacity-70">
+            {this.state.error?.name === 'QuotaExceededError' 
+              ? "Storage full: History cannot be saved. Please wipe history." 
+              : `Error: ${this.state.error?.message || "Memory Overload"}`}
+          </p>
+          <button onClick={() => {
+            localStorage.removeItem('it-meme-history-v3');
+            window.location.reload();
+          }} className="px-10 py-4 bg-primary-600 hover:bg-primary-500 text-white rounded-xl font-bold transition-all shadow-xl shadow-primary-600/20 uppercase tracking-widest text-sm">
+            Wipe_History_&_Restart
+          </button>
         </div>
       );
     }
@@ -66,11 +85,28 @@ function App() {
   }, []);
 
   const saveToHistory = (item: any) => {
-    setHistory(prev => {
-      const updated = [item, ...prev.filter(i => i.id !== item.id)].slice(0, 15);
-      localStorage.setItem('it-meme-history-v3', JSON.stringify(updated));
-      return updated;
-    });
+    // We delay the save to ensure UI rendering is complete
+    setTimeout(() => {
+      setHistory(prev => {
+        const filtered = prev.filter(i => i.id !== item.id);
+        // CRITICAL: 5 items limit to stay within 5MB localStorage limit
+        const updated = [item, ...filtered].slice(0, 5); 
+        
+        try {
+          localStorage.setItem('it-meme-history-v3', JSON.stringify(updated));
+        } catch (e) {
+          console.warn("[QA-Storage] LocalStorage limit reached. Cleaning history...");
+          // If quota exceeded, try saving just the current item or clear history
+          const reduced = [item];
+          try {
+             localStorage.setItem('it-meme-history-v3', JSON.stringify(reduced));
+          } catch (innerE) {
+             localStorage.removeItem('it-meme-history-v3');
+          }
+        }
+        return updated;
+      });
+    }, 1500); 
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
@@ -84,14 +120,15 @@ function App() {
     try {
       if (activeTab === GenerationType.SINGLE) {
         setCurrentMeme(null);
+        setCurrentComic(null);
         setStatus('ANALYZING_HUMOR...');
         const textData = await generateMemeText(topic);
         setStatus('RENDERING_PIXELS...');
-        const image = await generateImageFromPrompt(textData.visualPrompt + " viral meme style, high quality digital art");
+        const image = await generateImageFromPrompt(textData.visualPrompt + " high quality technical meme style");
         
         if (image.isQuotaError) {
-          setStatus('API_QUOTA_EXCEEDED');
-          throw new Error("Превышен лимит запросов API. Подождите 60 секунд.");
+          setStatus('LIMIT_REACHED');
+          throw new Error("Лимит API. Подождите 1 минуту.");
         }
 
         const res: MemeData = {
@@ -106,9 +143,16 @@ function App() {
         saveToHistory(res);
       } else {
         setStatus('COMIC_SCRIPTING...');
+        setCurrentMeme(null);
+        setCurrentComic(null);
+        
         const style = COMIC_STYLES.find(s => s.id === selectedStyleId) || COMIC_STYLES[0];
         const script = await generateComicScript(topic, 3);
         
+        if (!script.panels || script.panels.length === 0) {
+          throw new Error("Не удалось создать сценарий.");
+        }
+
         const initialPanels: ComicPanel[] = script.panels.map(p => ({ ...p, imageUrl: undefined }));
         const comicId = Date.now().toString();
         
@@ -123,131 +167,156 @@ function App() {
         };
         
         setCurrentComic(initialComic);
-        setCurrentMeme(null);
 
         let accumulatedPanels = [...initialPanels];
         
         for (let i = 0; i < accumulatedPanels.length; i++) {
-          setStatus(`PANEL_${i+1}_OF_${accumulatedPanels.length}...`);
-          const isLast = i === accumulatedPanels.length - 1;
-          
+          setStatus(`RENDERING_PANEL_${i+1}_OF_3...`);
           const img = await generateImageFromPrompt(`${accumulatedPanels[i].description}. ${style.promptSuffix}`);
           
           if (img.isQuotaError) {
-             setStatus('QUOTA_LIMIT_REACHED');
-             // Mark loading finished even if failed to show user the error
+             setStatus('QUOTA_LIMIT');
              setCurrentComic(prev => prev ? {...prev, isLoading: false} : null);
-             throw new Error("API Limit reached (429). Please wait 1 minute before next comic.");
+             throw new Error("Лимит запросов API. Пауза 60с.");
           }
 
-          const newImageUrl = img.imageUrl || `https://placehold.co/600x600?text=Panel_${i+1}_Failed`;
-          accumulatedPanels[i] = { ...accumulatedPanels[i], imageUrl: newImageUrl };
+          accumulatedPanels[i] = { 
+            ...accumulatedPanels[i], 
+            imageUrl: img.imageUrl || `https://placehold.co/600x600?text=Error_P${i+1}` 
+          };
           
+          const isLast = i === accumulatedPanels.length - 1;
           const updatedComic: ComicData = {
             ...initialComic,
             panels: [...accumulatedPanels],
             isLoading: !isLast
           };
 
+          // Individual step updates
           setCurrentComic(updatedComic);
 
-          if (isLast) {
-            saveToHistory(updatedComic);
-          } else {
-            // Increased cooldown for comic panels to avoid 429
+          if (!isLast) {
             for (let s = 5; s > 0; s--) { 
               setCoolDown(s); 
               await new Promise(r => setTimeout(r, 1000)); 
             }
             setCoolDown(0);
+          } else {
+            // Final stability pause before any storage operations
+            await new Promise(r => setTimeout(r, 800));
+            saveToHistory(updatedComic);
           }
         }
       }
     } catch (err: any) {
-      console.error("[QA-Global-Error]", err);
-      setStatus(err.message.includes('429') || err.message.includes('лимит') ? 'LIMIT_EXCEEDED' : 'ERROR_OCCURRED');
-      alert(err.message);
+      console.error("[QA-Engine-Failure]", err);
+      setStatus('BUILD_FAILED');
+      alert(err.message || "Ошибка системы генерации.");
     } finally {
-      setTimeout(() => {
-        setIsGenerating(false);
-        if (status === 'INITIALIZING') setStatus('SYSTEM_READY');
-        setCoolDown(0);
-      }, 500);
+      setIsGenerating(false);
+      setCoolDown(0);
+      setStatus('SYSTEM_IDLE');
     }
   };
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col font-sans selection:bg-primary-500">
+      <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col font-sans selection:bg-primary-500/30">
         <div className="absolute inset-0 bg-grid-pattern bg-grid opacity-10 pointer-events-none fixed"></div>
 
-        <header className="h-16 border-b border-gray-800 bg-gray-950/95 backdrop-blur sticky top-0 z-50 flex items-center px-6 justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-primary-600 rounded-xl flex items-center justify-center shadow-lg shadow-primary-500/20 border border-primary-500">
-              <Terminal size={20} className="text-white" />
+        <header className="h-16 border-b border-gray-800 bg-gray-950/95 backdrop-blur-xl sticky top-0 z-50 flex items-center px-6 justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-9 h-9 bg-primary-600 rounded-lg flex items-center justify-center shadow-lg shadow-primary-600/20 border border-primary-400/20">
+              <Terminal size={18} className="text-white" />
             </div>
-            <h1 className="text-xl font-bold font-mono tracking-tighter cursor-default">IT_MEME_LAB</h1>
+            <h1 className="text-lg font-black font-mono tracking-tighter uppercase">IT_MEME_LAB</h1>
           </div>
-          <div className="flex items-center gap-3 px-4 py-1.5 rounded-full border border-gray-800 bg-gray-900 font-mono text-[10px]">
-            <span className={`w-2 h-2 rounded-full ${isGenerating ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></span>
-            <span className="text-gray-400">{status}</span>
-            {coolDown > 0 && <span className="text-primary-400 ml-1">COOLDOWN: {coolDown}S</span>}
+          <div className="flex items-center gap-3">
+             <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-gray-900 border border-gray-800 rounded-full">
+               <span className={`w-1.5 h-1.5 rounded-full ${isGenerating ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></span>
+               <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">{status}</span>
+             </div>
+             {coolDown > 0 && <span className="text-primary-400 font-mono text-[10px] animate-pulse">THROTTLING_{coolDown}S</span>}
           </div>
         </header>
 
-        <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-          <aside className="w-full lg:w-[400px] border-r border-gray-800 bg-gray-950/50 p-6 space-y-8 overflow-y-auto z-10">
-            <div className="space-y-4">
-              <div className="flex p-1 bg-gray-900 rounded-xl border border-gray-800">
-                <TabButton active={activeTab === GenerationType.SINGLE} onClick={() => setActiveTab(GenerationType.SINGLE)} label="Мем" icon={<Image size={18} />} />
-                <TabButton active={activeTab === GenerationType.COMIC} onClick={() => setActiveTab(GenerationType.COMIC)} label="Комикс" icon={<Columns size={18} />} />
+        <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-10 flex flex-col lg:flex-row gap-10">
+          
+          <aside className="w-full lg:w-[360px] space-y-8 lg:sticky lg:top-24 h-fit">
+            <div className="space-y-6 bg-gray-900/40 p-6 rounded-3xl border border-gray-800/50 backdrop-blur-md">
+              <div className="flex p-1 bg-gray-950 rounded-2xl border border-gray-800">
+                <TabButton active={activeTab === GenerationType.SINGLE} onClick={() => setActiveTab(GenerationType.SINGLE)} label="MEME" icon={<Image size={16} />} />
+                <TabButton active={activeTab === GenerationType.COMIC} onClick={() => setActiveTab(GenerationType.COMIC)} label="COMIC" icon={<Columns size={16} />} />
               </div>
 
               <form onSubmit={handleGenerate} className="space-y-6">
-                {activeTab === GenerationType.COMIC && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-mono text-gray-500 uppercase px-1">Стиль отрисовки</label>
-                    <div className="relative">
-                      <select value={selectedStyleId} onChange={(e) => setSelectedStyleId(e.target.value)} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary-500 transition-all appearance-none cursor-pointer">
-                        {COMIC_STYLES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-                      </select>
-                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
-                        <Zap size={14} />
-                      </div>
-                    </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-mono text-gray-500 uppercase tracking-[0.2em] ml-1">Core_Topic</label>
+                    <button type="button" onClick={() => setTopic(RANDOM_PROMPTS[Math.floor(Math.random() * RANDOM_PROMPTS.length)])} className="text-[10px] text-primary-400 hover:text-primary-300 transition-colors flex items-center gap-1 font-mono">
+                      <Dices size={12} /> SHUFFLE
+                    </button>
                   </div>
-                )}
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center px-1">
-                    <label className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Тема шутки</label>
-                    <button type="button" onClick={() => setTopic(RANDOM_PROMPTS[Math.floor(Math.random()*RANDOM_PROMPTS.length)])} className="text-[10px] text-primary-500 flex items-center gap-1 hover:text-primary-400 transition-colors"><Dices size={12} /> RANDOM</button>
-                  </div>
-                  <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Опишите боль разработчика..." className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-4 text-sm focus:ring-2 focus:ring-primary-500 outline-none h-32 resize-none transition-all" maxLength={300} />
+                  <textarea 
+                    value={topic} 
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="Опишите ситуацию или баг..."
+                    className="w-full bg-gray-950 border border-gray-800 rounded-2xl px-5 py-4 focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500/50 outline-none transition-all text-sm h-32 resize-none placeholder:opacity-30"
+                    maxLength={250}
+                  />
                 </div>
-                <button type="submit" disabled={isGenerating} className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all ${isGenerating ? 'bg-red-600/50 cursor-not-allowed opacity-70' : 'bg-primary-600 hover:bg-primary-500 shadow-lg shadow-primary-500/20'}`}>
-                  {isGenerating ? <Skull size={20} className="animate-pulse" /> : <Zap size={20} />}
-                  <span className="uppercase tracking-widest font-mono">{isGenerating ? 'Processing...' : 'Execute_Build'}</span>
-                </button>
-                {status === 'LIMIT_EXCEEDED' && (
-                  <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] text-red-400 font-mono uppercase">
-                    <AlertTriangle size={14} className="shrink-0" />
-                    <span>Лимит бесплатных запросов исчерпан. Подождите минуту перед следующей генерацией.</span>
+
+                {activeTab === GenerationType.COMIC && (
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-mono text-gray-500 uppercase tracking-[0.2em] ml-1">Art_Style</label>
+                    <select 
+                      value={selectedStyleId} 
+                      onChange={(e) => setSelectedStyleId(e.target.value)}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-sm outline-none focus:ring-1 focus:ring-primary-500/50 appearance-none cursor-pointer hover:border-gray-700 transition-colors"
+                    >
+                      {COMIC_STYLES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    </select>
                   </div>
                 )}
+
+                <button 
+                  type="submit" 
+                  disabled={isGenerating || !topic.trim()}
+                  className="group relative w-full bg-primary-600 hover:bg-primary-500 disabled:opacity-30 text-white font-black py-5 rounded-2xl shadow-2xl shadow-primary-600/20 transition-all active:scale-[0.97] overflow-hidden"
+                >
+                  <div className="relative z-10 flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-xs">
+                    {isGenerating ? <Zap className="animate-spin text-white" size={16} /> : <Sparkles size={16} />}
+                    {isGenerating ? 'Compiling...' : 'Execute_Build'}
+                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_2s_infinite]"></div>
+                </button>
               </form>
             </div>
 
             {history.length > 0 && (
-              <div className="pt-8 border-t border-gray-800">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-[10px] font-mono text-gray-500 uppercase flex items-center gap-2"><History size={14} /> Buffer History</h3>
-                  <button onClick={() => { if(confirm('Clear history?')) { setHistory([]); localStorage.removeItem('it-meme-history-v3'); } }} className="text-red-500 hover:bg-red-500/10 p-2 rounded-lg transition-all" title="Clear History"><Trash2 size={14} /></button>
+              <div className="space-y-4 pt-4 border-t border-gray-800/50">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-[10px] font-mono text-gray-500 uppercase tracking-widest flex items-center gap-2"><History size={14} /> Buffer_History</h3>
+                  <button onClick={() => { if(confirm('Wipe history?')) { setHistory([]); localStorage.removeItem('it-meme-history-v3'); } }} className="text-gray-600 hover:text-red-500 p-2 rounded-lg transition-colors"><Trash2 size={14} /></button>
                 </div>
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-2 scrollbar-hide">
+                <div className="grid grid-cols-2 lg:grid-cols-1 gap-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-hide">
                   {history.map(item => (
-                    <div key={item.id} onClick={() => item.type === GenerationType.SINGLE ? (setCurrentMeme(item), setActiveTab(GenerationType.SINGLE), setCurrentComic(null)) : (setCurrentComic(item), setActiveTab(GenerationType.COMIC), setCurrentMeme(null))} className="p-3 bg-gray-900/50 border border-gray-800 rounded-xl cursor-pointer hover:border-primary-500 transition-all flex items-center gap-3 group">
-                      <span className="text-gray-600 group-hover:text-primary-500 transition-colors">{item.type === GenerationType.SINGLE ? <Image size={14} /> : <Columns size={14} />}</span>
-                      <span className="text-[10px] truncate text-gray-400 font-mono flex-1 group-hover:text-gray-200">{item.type === GenerationType.SINGLE ? (item.topText || 'Meme') : (item.topic || 'Comic')}</span>
+                    <div 
+                      key={item.id} 
+                      onClick={() => {
+                        if (item.type === GenerationType.SINGLE) {
+                          setCurrentMeme(item); setCurrentComic(null);
+                        } else {
+                          setCurrentComic(item); setCurrentMeme(null);
+                        }
+                        resultsRef.current?.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="p-3 bg-gray-900/30 border border-gray-800 rounded-xl cursor-pointer hover:border-primary-500/50 hover:bg-gray-900/50 transition-all flex items-center gap-3 group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-gray-950 flex items-center justify-center text-gray-600 group-hover:text-primary-500">
+                        {item.type === GenerationType.SINGLE ? <Image size={14} /> : <Columns size={14} />}
+                      </div>
+                      <span className="text-[10px] truncate text-gray-400 font-mono flex-1 group-hover:text-gray-200">{item.topic || item.topText}</span>
                     </div>
                   ))}
                 </div>
@@ -255,18 +324,34 @@ function App() {
             )}
           </aside>
 
-          <section ref={resultsRef} className="flex-1 bg-gray-900/10 overflow-y-auto p-4 lg:p-12 flex flex-col items-center custom-scrollbar">
-            {isGenerating && activeTab === GenerationType.SINGLE && !currentMeme && <TerminalLoader />}
+          <section ref={resultsRef} className="flex-1 flex flex-col items-center justify-start min-h-[60vh]">
+            {isGenerating && !currentMeme && !currentComic && <div className="mt-20"><TerminalLoader /></div>}
+            
             {activeTab === GenerationType.SINGLE && currentMeme && <MemeDisplay meme={currentMeme} />}
             {activeTab === GenerationType.COMIC && currentComic && <ComicDisplay comic={currentComic} />}
+            
             {!currentMeme && !currentComic && !isGenerating && (
-              <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-20">
-                <Sparkles size={64} />
-                <p className="font-mono text-sm tracking-widest uppercase">Input buffer empty: waiting for data...</p>
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-12 space-y-6 animate-fade-in">
+                <div className="relative">
+                  <Bug size={80} className="text-gray-800 opacity-20" />
+                  <div className="absolute -top-2 -right-2 bg-primary-500/20 p-2 rounded-full animate-pulse">
+                    <Zap size={24} className="text-primary-400" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-xl font-bold text-gray-700 uppercase tracking-tighter">System_Standby</h3>
+                  <p className="text-xs font-mono text-gray-500 max-w-xs leading-relaxed uppercase opacity-50">Feed the neural network with your professional pain...</p>
+                </div>
               </div>
             )}
           </section>
         </main>
+
+        <footer className="h-20 border-t border-gray-900 flex items-center justify-center px-10 gap-10 opacity-30 grayscale hover:grayscale-0 transition-all">
+           <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest"><Skull size={14} /> Built_For_Developers</div>
+           <div className="hidden md:block w-px h-4 bg-gray-800"></div>
+           <div className="text-[10px] font-mono uppercase tracking-widest">© 2025 IT_MEME_LAB_0.4.7_STABLE</div>
+        </footer>
       </div>
     </ErrorBoundary>
   );
