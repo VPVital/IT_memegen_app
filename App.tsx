@@ -5,7 +5,7 @@ import { TabButton } from './components/TabButton';
 import { MemeDisplay } from './components/MemeDisplay';
 import { ComicDisplay } from './components/ComicDisplay';
 import { TerminalLoader } from './components/TerminalLoader';
-import { generateMemeText, generateImageFromPrompt, generateComicScript } from './services/geminiService';
+import { generateMemeText, generateImageFromPrompt, generateComicScript, generateTrendingTopic } from './services/geminiService';
 import { GenerationType, MemeData, ComicData, COMIC_STYLES, ComicPanel } from './types';
 
 interface ErrorBoundaryProps { children?: ReactNode; }
@@ -66,6 +66,7 @@ function App() {
   const [selectedStyleId, setSelectedStyleId] = useState<string>(COMIC_STYLES[0].id);
   const [isGenerating, setIsGenerating] = useState(false);
   const [status, setStatus] = useState('SYSTEM_IDLE');
+  const [terminalLogs, setTerminalLogs] = useState<string[]>(['> BIOS v4.5 initialized', '> Waiting for user input...']);
   const [history, setHistory] = useState<any[]>([]);
   const [coolDown, setCoolDown] = useState(0);
   
@@ -109,11 +110,33 @@ function App() {
     }, 1500); 
   };
 
+  const addLog = (msg: string) => {
+    setTerminalLogs(prev => [...prev.slice(-4), `> ${msg}`]);
+  };
+
+  const handleTrendingTopic = async () => {
+    setIsGenerating(true);
+    setStatus('FETCHING_TRENDS...');
+    addLog('Accessing global developer trends...');
+    try {
+      const newTopic = await generateTrendingTopic();
+      setTopic(newTopic);
+      addLog(`New topic acquired: ${newTopic}`);
+    } catch (e) {
+      addLog('Failed to fetch trends. Using local cache.');
+    } finally {
+      setIsGenerating(false);
+      setStatus('SYSTEM_IDLE');
+    }
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim() || isGenerating) return;
 
     setIsGenerating(true);
+    setTerminalLogs([]);
+    addLog(`Initializing generation for: ${topic}`);
     setStatus('INITIALIZING...');
     resultsRef.current?.scrollIntoView({ behavior: 'smooth' });
 
@@ -122,18 +145,23 @@ function App() {
         setCurrentMeme(null);
         setCurrentComic(null);
         setStatus('ANALYZING_HUMOR...');
+        addLog('Running humor analysis algorithms...');
         const textData = await generateMemeText(topic);
+        addLog('Text script generated successfully.');
         setStatus('RENDERING_PIXELS...');
+        addLog('Synthesizing visual components...');
         const image = await generateImageFromPrompt(textData.visualPrompt + " high quality technical meme style");
         
         if (image.isQuotaError) {
+          addLog('CRITICAL: API Quota exceeded.');
           setStatus('LIMIT_REACHED');
           throw new Error("Лимит API. Подождите 1 минуту.");
         }
 
+        addLog('Meme rendering complete.');
+
         const res: MemeData = {
           id: Date.now().toString(),
-          type: GenerationType.SINGLE,
           ...textData,
           imageUrl: image.imageUrl || 'https://placehold.co/800x600?text=Render_Error',
           isLoading: false,
@@ -143,6 +171,7 @@ function App() {
         saveToHistory(res);
       } else {
         setStatus('COMIC_SCRIPTING...');
+        addLog('Drafting multi-panel scenario...');
         setCurrentMeme(null);
         setCurrentComic(null);
         
@@ -150,9 +179,11 @@ function App() {
         const script = await generateComicScript(topic, 3);
         
         if (!script.panels || script.panels.length === 0) {
+          addLog('ERROR: Script compilation failed.');
           throw new Error("Не удалось создать сценарий.");
         }
 
+        addLog(`Script ready. Style: ${style.label}`);
         const initialPanels: ComicPanel[] = script.panels.map(p => ({ ...p, imageUrl: undefined }));
         const comicId = Date.now().toString();
         
@@ -172,9 +203,11 @@ function App() {
         
         for (let i = 0; i < accumulatedPanels.length; i++) {
           setStatus(`RENDERING_PANEL_${i+1}_OF_3...`);
+          addLog(`Rendering panel ${i+1}/3...`);
           const img = await generateImageFromPrompt(`${accumulatedPanels[i].description}. ${style.promptSuffix}`);
           
           if (img.isQuotaError) {
+             addLog('CRITICAL: Image API limit reached.');
              setStatus('QUOTA_LIMIT');
              setCurrentComic(prev => prev ? {...prev, isLoading: false} : null);
              throw new Error("Лимит запросов API. Пауза 60с.");
@@ -196,12 +229,14 @@ function App() {
           setCurrentComic(updatedComic);
 
           if (!isLast) {
+            addLog('Throttling for API stability...');
             for (let s = 5; s > 0; s--) { 
               setCoolDown(s); 
               await new Promise(r => setTimeout(r, 1000)); 
             }
             setCoolDown(0);
           } else {
+            addLog('Comic strip finalized.');
             // Final stability pause before any storage operations
             await new Promise(r => setTimeout(r, 800));
             saveToHistory(updatedComic);
@@ -253,9 +288,14 @@ function App() {
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] font-mono text-gray-500 uppercase tracking-[0.2em] ml-1">Core_Topic</label>
-                    <button type="button" onClick={() => setTopic(RANDOM_PROMPTS[Math.floor(Math.random() * RANDOM_PROMPTS.length)])} className="text-[10px] text-primary-400 hover:text-primary-300 transition-colors flex items-center gap-1 font-mono">
-                      <Dices size={12} /> SHUFFLE
-                    </button>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={handleTrendingTopic} className="text-[10px] text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 font-mono">
+                        <Zap size={12} /> TRENDING
+                      </button>
+                      <button type="button" onClick={() => setTopic(RANDOM_PROMPTS[Math.floor(Math.random() * RANDOM_PROMPTS.length)])} className="text-[10px] text-primary-400 hover:text-primary-300 transition-colors flex items-center gap-1 font-mono">
+                        <Dices size={12} /> SHUFFLE
+                      </button>
+                    </div>
                   </div>
                   <textarea 
                     value={topic} 
@@ -290,6 +330,15 @@ function App() {
                   </div>
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_2s_infinite]"></div>
                 </button>
+
+                {/* Terminal Logs */}
+                <div className="bg-black/80 rounded-xl p-4 border border-gray-800 font-mono text-[10px] space-y-1 min-h-[100px]">
+                  {terminalLogs.map((log, i) => (
+                    <div key={i} className={i === terminalLogs.length - 1 ? "text-primary-400 animate-pulse" : "text-gray-500"}>
+                      {log}
+                    </div>
+                  ))}
+                </div>
               </form>
             </div>
 

@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
 import { MemeData } from '../types';
-import { Download, Copy, Check, Zap } from 'lucide-react';
+import { Download, Copy, Check, Zap, Share2 } from 'lucide-react';
 // @ts-ignore
 import html2canvas from 'html2canvas';
 
@@ -119,6 +119,27 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
     }
   };
 
+  const handleShare = async () => {
+    const canvas = await capture();
+    if (canvas && navigator.share) {
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `it-meme-${Date.now()}.png`, { type: 'image/png' });
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'IT Meme',
+            text: 'Check out this IT meme I generated!',
+          });
+        } catch (e) {
+          console.error("Share failed", e);
+        }
+      });
+    } else {
+      handleCopy();
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 w-full max-w-xl animate-fade-in pb-12">
       <div className="bg-gray-950 border border-gray-800 rounded-3xl p-3 shadow-2xl shadow-black overflow-hidden">
@@ -175,14 +196,18 @@ export const MemeDisplay: React.FC<MemeDisplayProps> = ({ meme }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <button onClick={handleCopy} className="flex items-center justify-center gap-2 py-4 bg-gray-900 hover:bg-gray-800 text-white rounded-2xl font-bold transition-all border border-gray-800 active:scale-95 text-[10px] font-mono uppercase tracking-widest">
           {isCopied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
-          {isCopied ? 'Buffer_Saved' : 'Copy_to_Buffer'}
+          {isCopied ? 'Saved' : 'Copy'}
+        </button>
+        <button onClick={handleShare} className="flex items-center justify-center gap-2 py-4 bg-gray-900 hover:bg-gray-800 text-white rounded-2xl font-bold transition-all border border-gray-800 active:scale-95 text-[10px] font-mono uppercase tracking-widest">
+          <Share2 size={16} />
+          Share
         </button>
         <button onClick={handleDownload} disabled={isProcessing} className="flex items-center justify-center gap-3 py-4 bg-primary-600 hover:bg-primary-500 text-white rounded-2xl font-bold transition-all shadow-xl shadow-primary-600/20 disabled:opacity-50 active:scale-95 text-[10px] font-mono uppercase tracking-widest">
           {isProcessing ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Download size={16} />}
-          Export_PNG
+          Export
         </button>
       </div>
     </div>

@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { ComicData } from '../types';
-import { Download, Copy, Check, Pencil } from 'lucide-react';
+import { Download, Copy, Check, Pencil, Share2 } from 'lucide-react';
 // @ts-ignore
 import html2canvas from 'html2canvas';
 
@@ -117,6 +117,28 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
     }
   };
 
+  const handleShare = async () => {
+    if (!comicRef.current) return;
+    const canvas = await generateCanvas(comicRef.current);
+    if (canvas && navigator.share) {
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `it-comic-${Date.now()}.png`, { type: 'image/png' });
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'IT Comic',
+            text: 'Check out this IT comic I generated!',
+          });
+        } catch (e) {
+          console.error("Share failed", e);
+        }
+      });
+    } else {
+      handleCopy();
+    }
+  };
+
   if (!comic?.panels || comic.panels.length === 0) return null;
 
   return (
@@ -180,14 +202,18 @@ export const ComicDisplay: React.FC<ComicDisplayProps> = ({ comic }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 w-full max-w-4xl">
+      <div className="grid grid-cols-3 gap-4 w-full max-w-4xl">
         <button onClick={handleCopy} className="flex items-center justify-center gap-3 py-5 bg-gray-900 hover:bg-gray-800 text-white rounded-2xl font-bold transition-all border border-gray-700 text-xs shadow-2xl active:scale-[0.98]">
           {isCopied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
-          <span className="font-mono uppercase tracking-widest">Copy_to_Buffer</span>
+          <span className="font-mono uppercase tracking-widest">Copy</span>
+        </button>
+        <button onClick={handleShare} className="flex items-center justify-center gap-3 py-5 bg-gray-900 hover:bg-gray-800 text-white rounded-2xl font-bold transition-all border border-gray-700 text-xs shadow-2xl active:scale-[0.98]">
+          <Share2 size={18} />
+          <span className="font-mono uppercase tracking-widest">Share</span>
         </button>
         <button onClick={handleDownload} disabled={isDownloading || comic.isLoading} className="flex items-center justify-center gap-3 py-5 bg-primary-600 hover:bg-primary-500 text-white rounded-2xl font-bold transition-all shadow-2xl shadow-primary-600/20 disabled:opacity-30 active:scale-[0.98]">
           {isDownloading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Download size={18} />}
-          <span className="font-mono uppercase tracking-widest">Export_Strip</span>
+          <span className="font-mono uppercase tracking-widest">Export</span>
         </button>
       </div>
     </div>

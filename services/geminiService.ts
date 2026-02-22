@@ -2,11 +2,26 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ComicData, MemeData, GenerationType } from "../types";
 
-const TEXT_MODEL = 'gemini-3-flash-preview';
+const TEXT_MODEL = 'gemini-3.1-pro-preview';
 const IMAGE_MODELS_PRIORITY = [
   'gemini-2.5-flash-image',
   'imagen-4.0-generate-001',
 ];
+
+export const generateTrendingTopic = async (): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const prompt = "Generate a short, funny, trending IT topic for a meme (e.g., 'React 19 compiler', 'AI taking dev jobs', 'Legacy code in COBOL'). Return only the topic string.";
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: prompt,
+    });
+    return (response.text || "").trim().replace(/^["']|["']$/g, '');
+  } catch (error) {
+    return "Debugging in production";
+  }
+};
 
 export interface ImageGenerationResult {
     imageUrl?: string;
@@ -61,7 +76,7 @@ export const generateMemeText = async (topic: string): Promise<Omit<MemeData, 'i
       },
     })); 
 
-    const data = JSON.parse(cleanJson(response.text));
+    const data = JSON.parse(cleanJson(response.text || "{}"));
     return {
       type: GenerationType.SINGLE,
       visualPrompt: data.visualPrompt,
@@ -109,7 +124,7 @@ export const generateComicScript = async (topic: string, panelCount: number): Pr
       },
     }));
 
-    const json = JSON.parse(cleanJson(response.text));
+    const json = JSON.parse(cleanJson(response.text || "{}"));
     return { type: GenerationType.COMIC, topic, panels: json.panels || [] };
   } catch (error) {
     throw error;
@@ -132,7 +147,7 @@ export const generateImageFromPrompt = async (fullPrompt: string): Promise<Image
           model,
           contents: { parts: [{ text: safePrompt }] },
         });
-        const part = res.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+        const part = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (part?.inlineData) return { imageUrl: `data:image/png;base64,${part.inlineData.data}` };
       }
     } catch (e: any) {
